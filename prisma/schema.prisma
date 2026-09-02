@@ -1,0 +1,210 @@
+// GuiaZap — envio automatizado de guias fiscais por WhatsApp
+// Postgres + Prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------
+// Multi-tenant: cada Tenant é um escritório de contabilidade
+// ---------------------------------------------------------------
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  cnpj      String   @unique
+  createdAt DateTime @default(now())
+
+  users       User[]
+  clients     Client[]
+  documents   Document[]
+  deliveries  Delivery[]
+  auditLogs   AuditLog[]
+  waAccount   WhatsAppAccount?
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         UserRole @default(OPERATOR)
+  createdAt    DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+}
+
+enum UserRole {
+  OWNER
+  OPERATOR
+  VIEWER
+}
+
+// Credenciais da Cloud API por escritório.
+// accessToken DEVE ser criptografado na aplicação (AES-256-GCM), nunca em texto puro.
+model WhatsAppAccount {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique
+  wabaId          String
+  phoneNumberId   String
+  displayPhone    String
+  accessTokenEnc  String
+  verifiedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+}
+
+// ---------------------------------------------------------------
+// Clientes finais (o "João") e consentimento LGPD
+// ---------------------------------------------------------------
+
+model Client {
+  id         String   @id @default(cuid())
+  tenantId   String
+  name       String
+  document   String   // CPF ou CNPJ, só dígitos — usado no matching por nome de arquivo
+  phoneE164  String   // +5579999999999
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  documents  Document[]
+  deliveries Delivery[]
+  consents   Consent[]
+
+  @@unique([tenantId, document])
+  @@index([tenantId, phoneE164])
+}
+
+// Prova de que o cliente autorizou receber no WhatsApp. Exigência de LGPD.
+model Consent {
+  id         String        @id @default(cuid())
+  clientId   String
+  channel    String        @default("whatsapp")
+  status     ConsentStatus
+  evidence   Json?         // origem, IP, texto aceito, ou id da msg de opt-in
+  grantedAt  DateTime      @default(now())
+  revokedAt  DateTime?
+
+  client Client @relation(fields: [clientId], references: [id])
+
+  @@index([clientId, status])
+}
+
+enum ConsentStatus {
+  GRANTED
+  REVOKED
+}
+
+// ---------------------------------------------------------------
+// Documentos
+// ---------------------------------------------------------------
+
+model Document {
+  id          String   @id @default(cuid())
+  tenantId    String
+  clientId    String?  // null = não conseguiu vincular, precisa de revisão humana
+  filename    String
+  mimeType    String
+  sizeBytes   Int
+  sha256      String   // impede subir a mesma guia duas vezes
+  storageKey  String   // chave no R2/S3
+  kind        String?  // DAS, DARF, FGTS, BOLETO...
+  competencia String?  // "2026-08"
+  dueDate     DateTime?
+  uploadedBy  String
+  createdAt   DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  client     Client?    @relation(fields: [clientId], references: [id])
+  deliveries Delivery[]
+
+  @@unique([tenantId, sha256])
+  @@index([tenantId, clientId])
+}
+
+// ---------------------------------------------------------------
+// Agendamento e envio
+// ---------------------------------------------------------------
+
+model Delivery {
+  id             String         @id @default(cuid())
+  tenantId       String
+  documentId     String
+  clientId       String
+  scheduledAt    DateTime
+  status         DeliveryStatus @default(SCHEDULED)
+  attempts       Int            @default(0)
+  idempotencyKey String         @unique // impede envio duplicado após crash
+  waMessageId    String?
+  lastError      String?
+  sentAt         DateTime?
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  createdAt      DateTime       @default(now())
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  document Document        @relation(fields: [documentId], references: [id])
+  client   Client          @relation(fields: [clientId], references: [id])
+  events   DeliveryEvent[]
+
+  @@index([status, scheduledAt])
+  @@index([tenantId, createdAt])
+}
+
+enum DeliveryStatus {
+  SCHEDULED
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  CANCELLED
+}
+
+// Linha do tempo técnica de cada envio (inclui webhooks da Meta)
+model DeliveryEvent {
+  id         String   @id @default(cuid())
+  deliveryId String
+  type       String   // queued, sent, delivered, read, failed
+  payload    Json?
+  occurredAt DateTime @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id])
+
+  @@index([deliveryId, occurredAt])
+}
+
+// ---------------------------------------------------------------
+// Auditoria — append-only. Revogue UPDATE/DELETE nesta tabela no Postgres.
+// ---------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  actorId    String?  // null = ação do sistema (worker, webhook)
+  actorLabel String   // "maria@escritorio.com" ou "system:dispatcher"
+  action     String   // client.created, client.phone_changed, delivery.cancelled...
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([entityType, entityId])
+}

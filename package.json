@@ -1,0 +1,40 @@
+{
+  "name": "guiazap",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "worker": "tsx src/workers/index.ts",
+    "worker:dev": "tsx watch src/workers/index.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1125.0",
+    "@aws-sdk/s3-request-presigner": "^3.1125.0",
+    "@prisma/client": "^7.10.0",
+    "better-auth": "^1.7.2",
+    "bullmq": "^6.3.4",
+    "ioredis": "^6.0.0",
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "prisma": "7.10.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  }
+}
