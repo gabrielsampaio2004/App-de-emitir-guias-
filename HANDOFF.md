@@ -3,25 +3,71 @@
 Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
-**O projeto não compila e não roda.**
+Estado: `npm run typecheck` passa limpo. `npm run dev` **ainda falha** — não
+existe `src/app/`.
+
+Última atualização: 02/09/2026, após o commit `0748c63`.
 
 ---
 
-## 1. Bugs confirmados — corrija primeiro
+## 1. Feito (não refazer)
 
-Reproduzidos por execução, não por leitura.
+Registrado porque a versão anterior deste documento descrevia alguns destes
+problemas de forma errada.
 
-### 1.1 `src/lib/matching/filename.ts` não compila
+- **`filename.ts` TS2532** — corrigido com `w[i] ?? 0`. ⚠️ Os cinco casos da
+  tabela na seção 3 **ainda não viraram teste automatizado** (não há test runner).
+- **`split(" ")[0]` no `dispatcher.ts`** — era o item "não verificado" da lista
+  antiga. Confirmou-se; corrigido com fallback para o nome completo.
+- **`new Blob([file])` com `Buffer`** — também era "não verificado". Confirmou-se
+  (`Buffer<ArrayBufferLike>` não é `BlobPart`); corrigido com `new Uint8Array(file)`.
+- **Prisma 7** — a versão anterior dizia que o problema era o gerador antigo
+  `prisma-client-js`. **Estava errado.** A causa real era outra e maior: o
+  Prisma 7 proíbe `url` no `schema.prisma` (erro P1012) e exige driver adapter
+  no construtor do `PrismaClient`. Resolvido criando `prisma.config.ts`,
+  removendo a `url` do schema e passando `PrismaPg` ao cliente. O gerador
+  `prisma-client-js` continua funcionando normalmente.
+- **`tsconfig.json`: `baseUrl`** — não estava na lista. O TypeScript 7 removeu a
+  opção (erro TS5102) e o typecheck nem começava. Removida; `paths` funciona
+  sozinho, resolvendo relativo ao `tsconfig.json`.
+- **`tsconfig.json`: `types`** — não estava na lista. O TS 7 não inclui mais os
+  tipos do Node automaticamente; `Buffer`, `process` e `NodeJS` davam TS2591
+  mesmo com `@types/node` instalado. Resolvido com `"types": ["node"]`.
+- **`tx` implicitamente `any`** — apareceu e sumiu sozinho. Era consequência do
+  `PrismaClient` não resolver; com o client gerado, a inferência funciona.
+- **`src/lib/crypto.ts` e `src/lib/storage.ts`** — criados. O `crypto.ts` foi
+  testado funcionalmente: cifra, decifra e rejeita dado adulterado.
+
+---
+
+## 2. Bug aberto — corrigir primeiro
+
+### 2.1 `src/lib/audit/index.ts` — a função `scrub` tem três defeitos
+
+Comprovado rodando:
 
 ```
-filename.ts(82,60): error TS2532: Object is possibly 'undefined'.
+scrub(['a','b'])                       -> {"0":"a","1":"b"}   // array vira objeto
+scrub(new Date('2026-01-01'))          -> {}                  // data some
+scrub({user:{passwordHash:'segredo'}}) -> segredo intacto     // não desce um nível
 ```
 
-O `tsconfig.json` liga `noUncheckedIndexedAccess`, e a linha
-`sum += Number(cnpj[i]) * w[i]` indexa `w` sem garantia. Corrija o acesso (ex.:
-`w[i] ?? 0`, ou reestruture o laço) **sem desligar a flag**.
+O terceiro é o grave: **um segredo aninhado vaza para o log de auditoria**, que
+é exatamente a tabela que precisa ser confiável.
 
-Depois de corrigir, os casos abaixo já passavam e não podem regredir:
+Reescreva `scrub` recursivo, preservando arrays como arrays e `Date` como ISO
+string. A lista `REDACTED` (`passwordHash`, `accessTokenEnc`, `accessToken`)
+deve valer em qualquer profundidade. Cubra os três casos com teste.
+
+---
+
+## 3. Testes — decisão pendente
+
+Não há test runner no `package.json`. Instalar um é decisão de arquitetura;
+**não instale nada sem perguntar antes.**
+
+Quando houver runner, estes cinco casos do `parseFilename` já passavam e não
+podem regredir:
 
 | entrada | `document` | `kind` | `competencia` |
 |---|---|---|---|
@@ -32,69 +78,35 @@ Depois de corrigir, os casos abaixo já passavam e não podem regredir:
 | `boleto protocolo 99999999999999 08-2026.pdf` | `null` | `BOLETO` | `2026-08` |
 
 A última linha é a que importa: 14 dígitos que **não** são CNPJ válido devem ser
-rejeitados. Escreva como teste automatizado, não rode na mão.
-
-### 1.2 `src/lib/audit/index.ts` — a função `scrub` tem três defeitos
-
-Comprovado rodando:
-
-```
-scrub(['a','b'])                       -> {"0":"a","1":"b"}   // array vira objeto
-scrub(new Date('2026-01-01'))          -> {}                  // data some
-scrub({user:{passwordHash:'segredo'}}) -> segredo intacto     // não desce um nível
-```
-
-O terceiro é o grave: **um segredo aninhado vaza para o log de auditoria**.
-Reescreva `scrub` recursivo, preservando arrays como arrays e `Date` como ISO
-string. A lista `REDACTED` deve valer em qualquer profundidade. Cubra os três
-casos com teste.
+rejeitados.
 
 ---
 
-## 2. Problemas por inspeção — confirme antes de corrigir
+## 4. Problemas por inspeção — confirme antes de corrigir
 
-Estes **não** foram executados. Verifique cada um em vez de assumir.
+Não foram executados. Verifique cada um em vez de assumir.
 
-1. **`dispatcher.ts` importa módulos inexistentes**: `../lib/storage` e
-   `../lib/crypto`. O `npm run worker` quebra no import. Ver seção 3.
-2. **`dispatcher.ts`**: `delivery.client.name.split(" ")[0]` é
-   `string | undefined` sob `noUncheckedIndexedAccess`, mas vai para `nome: string`.
-   Deve reprovar no `tsc` igual ao caso 1.1.
-3. **Delivery órfã em `enqueueDue`**: o código faz `UPDATE ... status = 'QUEUED'`
-   e depois `sendQueue.add()`. Se o `add` falhar (Redis fora do ar), a linha fica
-   `QUEUED` para sempre e nada a recupera — `enqueueDue` só busca `SCHEDULED`.
-   Resolva com um varredor de `QUEUED` parado há mais de N minutos, ou invertendo
-   a ordem. Decida e documente qual.
-4. **Não existe app Next nenhum.** Sem `src/app/`, sem `next.config.mjs`. O
-   `npm run dev` falha.
-5. **Consentimento inconsistente**: o schema permite `Consent` com
+1. **Delivery órfã em `enqueueDue`** (`dispatcher.ts`): o código faz
+   `UPDATE ... status = 'QUEUED'` e depois `sendQueue.add()`. Se o `add` falhar
+   (Redis fora do ar), a linha fica `QUEUED` para sempre e nada a recupera —
+   `enqueueDue` só busca `SCHEDULED`. Resolva com um varredor de `QUEUED` parado
+   há mais de N minutos, ou invertendo a ordem. Decida e documente qual.
+2. **Consentimento inconsistente**: o schema permite `Consent` com
    `status: GRANTED` e `revokedAt` preenchido ao mesmo tempo, e o dispatcher só
    filtra por `status`. Escolha uma fonte de verdade única.
-6. **Prisma 7 + `prisma-client-js`**: o schema usa o gerador antigo. O Prisma 7
-   introduziu `prisma-client` com `output` obrigatório. Rode `prisma generate` e
-   veja se o antigo ainda funciona sem aviso.
-7. **`meta-cloud.ts`**: `new Blob([file])` com `file: Buffer` — funciona em runtime
-   no Node 22, mas confira se o `tsc` reclama do tipo.
 
 ---
 
-## 3. O que construir, em ordem
+## 5. O que construir, em ordem
 
-Cada etapa deve estar rodando antes da seguinte.
+### Etapa 1 — fazer rodar  ← ATUAL
 
-### Etapa 1 — fazer compilar
+Falta só o app Next. Crie `src/app/layout.tsx` e `src/app/page.tsx` mínimos.
+O Next 16 sobe sem `next.config.mjs`; só crie um se precisar de configuração.
+Lembre que `package.json` tem `"type": "module"`.
 
-Corrija a seção 1 e os itens 1, 2, 4 e 6 da seção 2. Crie:
-
-- **`src/lib/crypto.ts`** — AES-256-GCM usando `ENCRYPTION_KEY` (hex de 32 bytes).
-  Exporte `encrypt(plain: string): string` e `decrypt(enc: string): string`.
-  Guarde IV e authTag junto do ciphertext. Falha na verificação do authTag deve
-  lançar, nunca retornar dado parcial.
-- **`src/lib/storage.ts`** — `putObject(key, body, contentType)` e
-  `getObject(key): Promise<Buffer>` no R2 via `@aws-sdk/client-s3`.
-- **`next.config.mjs`** e um `src/app/layout.tsx` + `src/app/page.tsx` mínimos.
-
-Aceite: `npm run typecheck` passa limpo e `npm run dev` sobe.
+Aceite: `npm run dev` sobe e responde em localhost:3000. (`npm run typecheck`
+limpo já está feito.)
 
 ### Etapa 2 — provar o envio de ponta a ponta
 
@@ -110,6 +122,10 @@ WhatsApp e o webhook voltar `delivered`.
 - Webhooks da Meta **chegam fora de ordem e repetidos**. Nunca regrida o status
   (`READ` não volta para `DELIVERED`) e trate reentrega do mesmo evento.
 
+Antes disso vai ser preciso rodar a primeira migration (`npm run db:migrate`),
+que exige um Postgres de verdade — hoje o `.env` aponta para um localhost que
+pode não existir.
+
 Aceite: uma guia real chega num WhatsApp real e o banco registra
 `sent` → `delivered`.
 
@@ -124,11 +140,15 @@ Aceite: uma guia real chega num WhatsApp real e o banco registra
 
 ---
 
-## 4. Como reportar
+## 6. Como reportar
 
 Ao terminar cada etapa, diga:
 
 1. O que você **executou** para verificar (comando e saída), separado do que
    apenas leu.
-2. Quais itens da seção 2 se confirmaram e quais não.
+2. Quais itens da seção 4 se confirmaram e quais não.
 3. O que ficou faltando.
+
+Vale notar: dos problemas listados como "não verificados" na versão anterior
+deste documento, dois se confirmaram, um estava descrito com a causa errada, e
+três problemas reais não estavam listados. Verificar de fato importa.
