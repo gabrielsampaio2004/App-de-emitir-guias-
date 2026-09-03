@@ -1,12 +1,14 @@
 import { Queue, Worker } from "bullmq";
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { MetaCloudProvider } from "../lib/whatsapp/meta-cloud";
 import { WhatsAppError } from "../lib/whatsapp/provider";
 import { audit } from "../lib/audit";
 import { getObject } from "../lib/storage";
 import { decrypt } from "../lib/crypto";
 
-const db = new PrismaClient();
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const db = new PrismaClient({ adapter });
 const connection = { url: process.env.REDIS_URL! };
 export const sendQueue = new Queue("deliveries", { connection });
 
@@ -86,7 +88,7 @@ export const dispatcher = new Worker(
         mimeType: delivery.document.mimeType,
         idempotencyKey: delivery.idempotencyKey,
         vars: {
-          nome: delivery.client.name.split(" ")[0],
+          nome: delivery.client.name.split(" ")[0] ?? delivery.client.name,
           tipo: delivery.document.kind ?? "documento",
           competencia: delivery.document.competencia ?? "-",
           vencimento:

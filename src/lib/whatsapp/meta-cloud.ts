@@ -88,7 +88,7 @@ export class MetaCloudProvider implements WhatsAppProvider {
     const form = new FormData();
     form.append("messaging_product", "whatsapp");
     form.append("type", mimeType);
-    form.append("file", new Blob([file], { type: mimeType }), filename);
+    form.append("file", new Blob([new Uint8Array(file)], { type: mimeType }), filename);
 
     const res = await fetch(`${GRAPH}/${this.phoneNumberId}/media`, {
       method: "POST",

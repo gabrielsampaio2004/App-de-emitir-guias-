@@ -79,7 +79,7 @@ function isValidCNPJ(cnpj: string): boolean {
   for (const len of [12, 13] as const) {
     const w = weights.slice(13 - len);
     let sum = 0;
-    for (let i = 0; i < len; i++) sum += Number(cnpj[i]) * w[i];
+    for (let i = 0; i < len; i++) sum += Number(cnpj[i]) * (w[i] ?? 0);
     const rest = sum % 11;
     const dv = rest < 2 ? 0 : 11 - rest;
     if (dv !== Number(cnpj[len])) return false;
