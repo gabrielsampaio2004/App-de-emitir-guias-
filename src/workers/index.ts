@@ -1,4 +1,4 @@
-import { enqueueDue, dispatcher, sendQueue } from "./dispatcher";
+import { enqueueDue, recoverStuckDeliveries, dispatcher, sendQueue } from "./dispatcher";
 
 const TICK_MS = 60_000;
 
@@ -12,6 +12,11 @@ async function tick() {
     await enqueueDue();
   } catch (err) {
     console.error("[dispatcher] falha ao enfileirar:", err);
+  }
+  try {
+    await recoverStuckDeliveries();
+  } catch (err) {
+    console.error("[dispatcher] falha na varredura de entregas presas:", err);
   } finally {
     running = false;
   }

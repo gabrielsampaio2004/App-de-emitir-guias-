@@ -18,8 +18,6 @@ export interface SendDocumentParams {
     competencia: string; // "08/2026"
     vencimento: string;  // "20/09/2026"
   };
-  /** Evita duplicidade se a chamada for repetida */
-  idempotencyKey: string;
 }
 
 export interface SendResult {
@@ -40,3 +38,8 @@ export class WhatsAppError extends Error {
 export interface WhatsAppProvider {
   sendDocument(params: SendDocumentParams): Promise<SendResult>;
 }
+
+// Deduplicação de envio (Delivery.idempotencyKey) é responsabilidade do
+// dispatcher, não desta interface: a Cloud API não tem chave de idempotência
+// no /messages, só dedupe de webhook por message id. A trava real é local —
+// jobId do BullMQ e o registro do waMessageId antes de qualquer outra escrita.

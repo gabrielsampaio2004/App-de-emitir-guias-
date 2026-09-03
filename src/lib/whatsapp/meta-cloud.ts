@@ -56,16 +56,48 @@ export class MetaCloudProvider implements WhatsAppProvider {
       },
     };
 
-    const res = await fetch(`${GRAPH}/${this.phoneNumberId}/messages`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
+    // A partir daqui não sabemos mais, em caso de erro, se a Meta processou o
+    // envio ou não — e diferente do upload de mídia, reenviar aqui manda a
+    // guia pela segunda vez para o cliente. Por isso qualquer falha a partir
+    // deste ponto (rede caindo no meio do fetch, corpo 2xx sem o id esperado)
+    // vira WhatsAppError não retryable: falha fechada, nunca reenvio às cegas.
+    let res: Response;
+    try {
+      res = await fetch(`${GRAPH}/${this.phoneNumberId}/messages`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (networkErr) {
+      const message =
+        networkErr instanceof Error ? networkErr.message : String(networkErr);
+      throw new WhatsAppError(
+        `Rede caiu durante o envio da mensagem — não é possível saber se a Meta processou: ${message}`,
+        "SEND_NETWORK_AMBIGUOUS",
+        false,
+      );
+    }
 
-    const json = await res.json();
+    let json: any;
+    try {
+      json = await res.json();
+    } catch (parseErr) {
+      if (res.ok) {
+        throw new WhatsAppError(
+          "Meta respondeu 2xx no envio mas o corpo não é JSON válido — não é possível confirmar o id da mensagem",
+          "SEND_BODY_UNPARSEABLE",
+          false,
+        );
+      }
+      throw new WhatsAppError(
+        `Falha no envio (HTTP ${res.status}, corpo ilegível)`,
+        String(res.status),
+        res.status >= 500,
+      );
+    }
 
     if (!res.ok) {
       const err = json?.error ?? {};
@@ -77,7 +109,18 @@ export class MetaCloudProvider implements WhatsAppProvider {
       );
     }
 
-    return { providerMessageId: json.messages[0].id };
+    const messageId = json?.messages?.[0]?.id;
+    if (!messageId) {
+      // 200 sem messages[0].id: a Meta aceitou a requisição mas não devolveu
+      // o id. O envio provavelmente ocorreu — não reenviar às cegas.
+      throw new WhatsAppError(
+        "Meta respondeu 2xx no envio mas sem messages[0].id — envio provável, mas sem confirmação de qual mensagem foi criada",
+        "SEND_NO_MESSAGE_ID",
+        false,
+      );
+    }
+
+    return { providerMessageId: messageId };
   }
 
   private async uploadMedia(
