@@ -19,13 +19,45 @@ export interface AuditEntry {
 /** Campos que nunca devem cair no log. */
 const REDACTED = new Set(["passwordHash", "accessTokenEnc", "accessToken"]);
 
-function scrub(value: unknown): Prisma.InputJsonValue | undefined {
-  if (value == null || typeof value !== "object") {
-    return value as Prisma.InputJsonValue | undefined;
+/** Profundidade máxima, como proteção contra estruturas patologicamente aninhadas. */
+const MAX_DEPTH = 20;
+
+function scrub(value: unknown, depth = 0): Prisma.InputJsonValue | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null as unknown as Prisma.InputJsonValue;
+
+  // Date vira ISO string. Sem isto, Object.entries() devolveria {} e a data
+  // sumiria silenciosamente do log.
+  if (value instanceof Date) {
+    return value.toISOString();
   }
-  const out: Record<string, unknown> = {};
+
+  if (typeof value !== "object") {
+    // bigint não é serializável em JSON; vira string em vez de quebrar o insert.
+    if (typeof value === "bigint") return value.toString();
+    return value as Prisma.InputJsonValue;
+  }
+
+  if (depth >= MAX_DEPTH) {
+    return "[profundidade máxima atingida]";
+  }
+
+  // Arrays precisam continuar arrays. A versão anterior os transformava em
+  // objetos indexados por posição: ['a','b'] virava {"0":"a","1":"b"}.
+  if (Array.isArray(value)) {
+    return value.map((item) => scrub(item, depth + 1) ?? null) as Prisma.InputJsonValue;
+  }
+
+  const out: Record<string, Prisma.InputJsonValue> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = REDACTED.has(k) ? "[redacted]" : v;
+    if (REDACTED.has(k)) {
+      out[k] = "[redacted]";
+      continue;
+    }
+    // A recursão é o ponto crítico: sem ela, um segredo aninhado como
+    // { user: { accessToken: "..." } } passava intacto para o AuditLog.
+    const scrubbed = scrub(v, depth + 1);
+    if (scrubbed !== undefined) out[k] = scrubbed;
   }
   return out as Prisma.InputJsonValue;
 }
