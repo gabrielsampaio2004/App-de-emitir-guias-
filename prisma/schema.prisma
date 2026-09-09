@@ -19,12 +19,23 @@ model Tenant {
   cnpj      String   @unique
   createdAt DateTime @default(now())
 
+  // Regra de agendamento: quando mandar uma guia em relação ao vencimento
+  // dela. Uma regra por tenant (não por cliente nem por tipo de guia).
+  scheduleRuleType               ScheduleRuleType @default(FIXED_DAY)
+  scheduleRuleFixedDay           Int? // dia do mês (1-31); usado com FIXED_DAY
+  scheduleRuleBusinessDaysBefore Int? // dias úteis antes do vencimento; usado com BUSINESS_DAYS_BEFORE_DUE
+
   users       User[]
   clients     Client[]
   documents   Document[]
   deliveries  Delivery[]
   auditLogs   AuditLog[]
   waAccount   WhatsAppAccount?
+}
+
+enum ScheduleRuleType {
+  FIXED_DAY
+  BUSINESS_DAYS_BEFORE_DUE
 }
 
 model User {
@@ -156,6 +167,12 @@ model Delivery {
   client   Client          @relation(fields: [clientId], references: [id])
   events   DeliveryEvent[]
 
+  // Trava contra reenvio: hoje nada no produto reagenda um Document que já
+  // tem Delivery (nem o "enviar agora" nem a revisão criam uma segunda). Sem
+  // isso, um duplo-clique ou um POST de página desatualizada na fila de
+  // revisão cria duas Deliveries com idempotencyKey diferentes — a trava do
+  // BullMQ não pega porque, pra ela, são dois envios "diferentes".
+  @@unique([documentId])
   @@index([status, scheduledAt])
   @@index([tenantId, createdAt])
 }

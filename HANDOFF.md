@@ -4,11 +4,11 @@ Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
 Estado: `npm run typecheck` passa limpo. `npm run dev` sobe. `npm run build`
-passa limpo (`/` como rota dinâmica). Etapa 2 implementada e verificada
-localmente (Postgres/Redis reais neste ambiente, sem R2/Meta reais — ver
-seção 5).
+passa limpo (todas as rotas dinâmicas). Etapas 2 e 3 implementadas e
+verificadas localmente (Postgres/Redis reais neste ambiente, sem R2/Meta
+reais — ver seção 5).
 
-Última atualização: 09/09/2026, etapa 2.
+Última atualização: 09/09/2026, etapa 3.
 
 ---
 
@@ -50,7 +50,7 @@ problemas de forma errada.
 ## 2. Bugs abertos
 
 Nenhum no momento. Todos os bugs confirmados por execução foram corrigidos
-(incluindo dois novos, achados testando a etapa 2 — ver seção 5). O que
+(dois na etapa 2, um na etapa 3 — ver seção 5). O que
 resta não é conserto, é construção: ver seções 3, 4 e 5.
 
 ---
@@ -160,14 +160,88 @@ pré-renderizá-la como estática no build, congelando os dados.
 com elas, subir `npm run dev` + `npm run worker`, e clicar "enviar agora" de
 verdade.
 
-### Etapa 3 — o produto  ← ATUAL
+### Etapa 3 — o produto ✅ (até o limite de credenciais reais)
 
-- Upload de pasta inteira via `<input type="file" webkitdirectory />`.
-- Matching automático pelo `parseFilename`; o que não casar vai para fila de
-  revisão manual.
-- Agendamento por regra ("dia 20", "3 dias úteis antes do vencimento"), com
-  calendário de feriados.
-- Tela de log lendo `AuditLog` e `DeliveryEvent`.
+Implementada e testada localmente (Postgres/Redis reais, sem R2/Meta reais —
+mesma fronteira da etapa 2). Três decisões de produto que não estavam
+escritas foram tomadas com o usuário antes de mexer no schema — registradas
+aqui porque não têm como ficar óbvias só lendo o código:
+
+1. **Regra de agendamento por tenant** (não por cliente, não por tipo de
+   guia). Cada tenant tem uma regra só, configurável em `/configuracoes`:
+   `FIXED_DAY` ("todo dia N do mês") ou `BUSINESS_DAYS_BEFORE_DUE` ("N dias
+   úteis antes do vencimento").
+2. **Só feriado nacional** no cálculo de dia útil — sem estadual/municipal.
+   Cobre menos caso, mas não arrisca inventar feriado errado pro município
+   do cliente (`src/lib/scheduling/holidays.ts`, com Páscoa calculada e
+   Sexta-feira Santa; Carnaval e Corpus Christi ficam de fora de propósito
+   por não serem feriado nacional por lei).
+3. **A data de vencimento (`dueDate`) é confirmada pelo contador na fila de
+   revisão**, não extraída/inferida do nome do arquivo ou do tipo da guia.
+   `parseFilename` não muda: continua só `document`/`kind`/`competencia`.
+   Chutar vencimento por tipo de guia (DAS/DARF/FGTS têm regras diferentes,
+   às vezes municipais) arriscava mandar guia fora da data — dinheiro de
+   verdade, mesmo raciocínio da regra "nunca chute o cliente".
+
+O que foi construído:
+- **`prisma/migrations/20260909182637_etapa3_schedule_rule/`** — campos de
+  regra no `Tenant` (`scheduleRuleType`, `scheduleRuleFixedDay`,
+  `scheduleRuleBusinessDaysBefore`).
+- **`src/lib/scheduling/holidays.ts`** — feriado nacional (fixo + Sexta-feira
+  Santa via algoritmo de Meeus/Jones/Butcher pra Páscoa) e dias úteis, tudo
+  em UTC pra não pegar bug de fuso na virada do dia. Conferido manualmente:
+  Sexta-feira Santa 2026 = 3/abr (Páscoa 5/abr), 7/set (Independência) cai
+  numa segunda e não é dia útil, 3 dias úteis antes de 7/set/2026 = 2/set.
+- **`src/lib/scheduling/rule.ts`** — traduz a regra do tenant + o vencimento
+  numa data de envio. `FIXED_DAY`: dia N do mês do vencimento, ou do mês
+  anterior se esse dia já passou do vencimento; sem ajuste de dia útil (se
+  cair em fim de semana/feriado, o `enqueueDue` pega no tick seguinte, só
+  atrasa minutos, não perde o envio).
+- **`src/lib/matching/client.ts`** — matching automático por CPF/CNPJ
+  (`parseFilename` + busca por `tenantId`+`document`+`active`), reaproveitado
+  tanto no upload em lote quanto (implicitamente) na revisão manual.
+- **`src/app/lote/`** — upload de pasta inteira (`webkitdirectory`, `multiple`
+  no input). Cada arquivo é isolado num try/catch (duplicado, não-PDF, ou
+  erro de storage não derruba o lote inteiro); documento sem match cai com
+  `clientId = null`. Não cria `Delivery` — só o `/revisao` faz isso.
+- **`src/app/revisao/`** — fila de tudo que ainda não tem `Delivery`
+  (`deliveries: { none: {} }`). Confirma cliente + vencimento, calcula
+  `scheduledAt` pela regra do tenant, grava `Document` + `Delivery` + audit
+  na mesma transação. Não chama `claimAndEnqueue`: `scheduledAt` normalmente
+  é no futuro, quem manda pra fila do BullMQ na hora certa é o `enqueueDue`
+  do worker, igual qualquer outra `Delivery` agendada.
+- **`src/app/configuracoes/`** — formulário pra trocar a regra do tenant.
+- **`src/app/log/`** — leitura de `AuditLog` e `DeliveryEvent`, só leitura.
+- Nav simples em `layout.tsx` ligando as cinco telas.
+
+**Bug achado por execução (não por inspeção) e corrigido:** testando o fluxo
+de revisão no navegador, uma aba com a página desatualizada conseguiu confirmar
+o mesmo `Document` duas vezes — duas `Delivery`s pro mesmo documento, cada uma
+com `idempotencyKey` diferente, então a trava de `jobId` do BullMQ não pegava
+(pra ela são dois envios "diferentes"). Isso é exatamente o que a regra
+"nunca envie duas vezes" do `CLAUDE.md` proíbe. Corrigido com
+`@@unique([documentId])` no `Delivery` (migration
+`20260909190000_delivery_document_unique`) — mesma filosofia das outras
+travas do projeto (trava no banco, não só na aplicação). Reproduzido de
+propósito com duas abas confirmando o mesmo documento quase ao mesmo tempo:
+só uma `Delivery` foi criada, a segunda tentativa voltou com "Este documento
+já foi agendado — atualize a página." Confirmado direto no `/log` depois:
+uma linha `delivery.scheduled` só. **Limitação conhecida:** o Next não
+propaga essa mensagem pro formulário na tela (erro de Server Action sem
+`useActionState` vira uma tela de erro genérica) — a integridade dos dados
+está garantida pela constraint, mas a UX do erro podia ser melhor.
+
+Testado via navegador de verdade (Chromium headless), não só por tipo:
+upload em lote (2 arquivos, um com CPF válido que bateu automático com o
+cliente do seed, outro com CPF de dígito verificador inválido que caiu como
+"não reconhecido"), confirmação na fila de revisão com cálculo de
+`scheduledAt` nos dois ramos da regra `FIXED_DAY` (dia-do-vencimento-ainda-
+não-passou e caiu-no-mês-anterior), e a tela de log mostrando a trilha
+completa.
+
+**Falta para o aceite 100%:** as mesmas credenciais reais de R2/Meta da
+etapa 2 — o upload em lote para exatamente no `putObject` (`R2_ACCOUNT_ID
+não definida`), mesma fronteira, sem linha órfã no banco.
 
 ---
 
