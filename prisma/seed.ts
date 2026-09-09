@@ -27,14 +27,19 @@ async function main() {
     },
   });
 
+  // SEED_CLIENT_PHONE definida = intenção explícita de trocar o número de
+  // teste (normalmente o seu, pra guia chegar em algum lugar). Sem ela, um
+  // re-seed não mexe no telefone que já está gravado.
+  const seedClientPhone = process.env.SEED_CLIENT_PHONE;
+
   const client = await db.client.upsert({
     where: { tenantId_document: { tenantId: tenant.id, document: "52998224725" } },
-    update: {},
+    update: seedClientPhone ? { phoneE164: seedClientPhone } : {},
     create: {
       tenantId: tenant.id,
       name: "João da Silva",
       document: "52998224725",
-      phoneE164: process.env.SEED_CLIENT_PHONE ?? "+5511999999999",
+      phoneE164: seedClientPhone ?? "+5511999999999",
     },
   });
 
@@ -56,25 +61,35 @@ async function main() {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
   const displayPhone = process.env.WHATSAPP_DISPLAY_PHONE ?? "+55 79 9999-9999";
 
-  if (!wabaId || !phoneNumberId || !accessToken) {
+  const hasRealCredentials = Boolean(wabaId && phoneNumberId && accessToken);
+
+  if (!hasRealCredentials) {
     console.warn(
       "[seed] WHATSAPP_WABA_ID / WHATSAPP_PHONE_NUMBER_ID / WHATSAPP_ACCESS_TOKEN " +
-        "não definidos — gravando WhatsAppAccount com placeholders. O botão " +
-        "'enviar agora' vai falhar na chamada à Cloud API até esses valores " +
-        "reais serem definidos e o seed rodado de novo.",
+        "não definidos — o envio real vai falhar na chamada à Cloud API. " +
+        "Preencha as três no .env e rode `npm run db:seed` de novo; uma conta " +
+        "já gravada com valores reais NÃO é sobrescrita por placeholder.",
     );
   }
 
+  const waAccount = {
+    wabaId: wabaId ?? "PLACEHOLDER_WABA_ID",
+    phoneNumberId: phoneNumberId ?? "PLACEHOLDER_PHONE_NUMBER_ID",
+    displayPhone,
+    // O token vai cifrado (AES-256-GCM) com ENCRYPTION_KEY, nunca em texto puro.
+    accessTokenEnc: encrypt(accessToken ?? "PLACEHOLDER_ACCESS_TOKEN"),
+  };
+
   await db.whatsAppAccount.upsert({
     where: { tenantId: tenant.id },
-    update: {},
-    create: {
-      tenantId: tenant.id,
-      wabaId: wabaId ?? "PLACEHOLDER_WABA_ID",
-      phoneNumberId: phoneNumberId ?? "PLACEHOLDER_PHONE_NUMBER_ID",
-      displayPhone,
-      accessTokenEnc: encrypt(accessToken ?? "PLACEHOLDER_ACCESS_TOKEN"),
-    },
+    // Só atualiza quando as três variáveis reais estão presentes. Antes era
+    // `update: {}`: rodar o seed de novo depois de preencher as credenciais
+    // não fazia nada, e o registro ficava com os placeholders para sempre —
+    // exatamente o contrário do que o aviso acima mandava fazer. O guard
+    // também impede o caminho oposto: um re-seed sem as variáveis apagando
+    // credencial real.
+    update: hasRealCredentials ? waAccount : {},
+    create: { tenantId: tenant.id, ...waAccount },
   });
 
   console.log(`[seed] tenant=${tenant.id} client=${client.id}`);
