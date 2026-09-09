@@ -31,6 +31,14 @@ export async function sendNow(formData: FormData) {
   }
 
   const client = await db.client.findUniqueOrThrow({ where: { id: clientId } });
+  if (!client.active) {
+    // O <select> da tela só lista cliente ativo, mas o formulário chega
+    // como POST comum — sem essa checagem, um cliente desativado entre o
+    // carregamento da página e o envio criaria Document+Delivery que o
+    // dispatcher cancela em silêncio, sem o contador nunca saber que a
+    // guia não foi.
+    throw new Error("Este cliente está desativado — reative em /clientes antes de enviar.");
+  }
 
   const bytes = Buffer.from(await file.arrayBuffer());
   const sha256 = createHash("sha256").update(bytes).digest("hex");

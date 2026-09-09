@@ -220,6 +220,30 @@ O que foi construído:
   do consentimento revogado). Reativar não ressuscita o que já foi cancelado.
 - Nav simples em `layout.tsx` ligando as seis telas.
 
+**Auditoria depois de entregar a tela de clientes** (o usuário pediu pra
+verificar tudo de novo): reli `dispatcher.ts`, `actions.ts` da home e
+`revisao/actions.ts` com foco no que mudou. Dois problemas reais, os dois
+corrigidos:
+1. **`sendNow` e `confirmDocument` não checavam `client.active` no
+   servidor** — só o `<select>` da tela filtra cliente ativo. Uma aba
+   desatualizada (ou um POST direto) com um cliente já desativado criava
+   `Document`+`Delivery` normalmente; o `dispatcher` cancelava certinho no
+   momento do envio (a trava que importa pro dinheiro continuava valendo),
+   mas o contador via o formulário "dar certo" e a guia nunca saía, sem
+   nenhum aviso na hora. Corrigido com uma checagem explícita nas duas
+   actions, que agora rejeitam na hora com "Este cliente está desativado".
+   Reproduzido injetando uma `<option>` de cliente inativo no `<select>` via
+   DOM (simulando página desatualizada) nos dois formulários: os dois
+   lançaram o erro e nenhum `Document`/`Delivery` foi criado.
+2. **`dispatcher`: no caminho de falha (`catch` do envio), o `Delivery.update`
+   e o `DeliveryEvent.create` não estavam na mesma transação** — dois writes
+   separados, herdados da etapa 2 sem que eu tivesse notado antes. Um crash
+   do processo entre os dois deixaria o status mudado sem o evento
+   correspondente registrado. Não é o `AuditLog` (a regra do `CLAUDE.md` é
+   sobre isso, e essa continuava valendo — esse caminho nunca chamou
+   `audit()`), mas é o mesmo princípio. Corrigido envolvendo os dois num
+   `$transaction`, igual o caminho de sucesso já fazia.
+
 **Bug achado por execução (não por inspeção) e corrigido:** testando o fluxo
 de revisão no navegador, uma aba com a página desatualizada conseguiu confirmar
 o mesmo `Document` duas vezes — duas `Delivery`s pro mesmo documento, cada uma

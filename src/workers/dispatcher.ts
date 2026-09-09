@@ -121,16 +121,21 @@ export const dispatcher = new Worker(
       const retryable = err instanceof WhatsAppError ? err.retryable : true;
       const message = err instanceof Error ? err.message : String(err);
 
-      await db.delivery.update({
-        where: { id: delivery.id },
-        data: { status: retryable ? "QUEUED" : "FAILED", lastError: message },
-      });
-      await db.deliveryEvent.create({
-        data: {
-          deliveryId: delivery.id,
-          type: "failed",
-          payload: { message, retryable },
-        },
+      // Status e evento na mesma transação — antes eram dois writes
+      // separados; um crash entre os dois deixava a Delivery em QUEUED/
+      // FAILED sem o DeliveryEvent correspondente registrado.
+      await db.$transaction(async (tx) => {
+        await tx.delivery.update({
+          where: { id: delivery.id },
+          data: { status: retryable ? "QUEUED" : "FAILED", lastError: message },
+        });
+        await tx.deliveryEvent.create({
+          data: {
+            deliveryId: delivery.id,
+            type: "failed",
+            payload: { message, retryable },
+          },
+        });
       });
 
       if (retryable) throw err; // deixa o BullMQ tentar de novo

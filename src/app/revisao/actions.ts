@@ -40,6 +40,12 @@ export async function confirmDocument(formData: FormData) {
   const client = await db.client.findFirstOrThrow({
     where: { id: clientId, tenantId: document.tenantId },
   });
+  if (!client.active) {
+    // O <select> só lista cliente ativo, mas isso é um POST comum — sem
+    // essa checagem, uma aba desatualizada agendaria pra um cliente
+    // desativado e o dispatcher cancelaria em silêncio na hora do envio.
+    throw new Error("Este cliente está desativado — reative em /clientes antes de agendar.");
+  }
   const tenant = await db.tenant.findUniqueOrThrow({ where: { id: document.tenantId } });
 
   const scheduledAt = computeScheduledAt(tenant, dueDate);
