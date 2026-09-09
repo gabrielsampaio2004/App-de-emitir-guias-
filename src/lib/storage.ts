@@ -14,13 +14,19 @@ function client(): S3Client {
   const accountId = process.env.R2_ACCOUNT_ID;
   if (!accountId) throw new Error("R2_ACCOUNT_ID não definida no ambiente");
 
+  // Credencial faltando falha aqui, com o nome da variável. Antes virava
+  // string vazia e o erro só aparecia lá no SDK da AWS, como falha de
+  // assinatura — que não diz a ninguém que o problema era um .env incompleto.
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  if (!accessKeyId) throw new Error("R2_ACCESS_KEY_ID não definida no ambiente");
+
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  if (!secretAccessKey) throw new Error("R2_SECRET_ACCESS_KEY não definida no ambiente");
+
   return new S3Client({
     region: "auto",
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? "",
-    },
+    credentials: { accessKeyId, secretAccessKey },
   });
 }
 
