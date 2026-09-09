@@ -1,43 +1,14 @@
-import { Queue, Worker } from "bullmq";
-import { PrismaClient } from "@prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
+import { Worker } from "bullmq";
 import { MetaCloudProvider } from "../lib/whatsapp/meta-cloud";
 import { WhatsAppError } from "../lib/whatsapp/provider";
 import { audit } from "../lib/audit";
 import { getObject } from "../lib/storage";
 import { decrypt } from "../lib/crypto";
+import { db } from "../lib/db";
+import { connection, sendQueue } from "../lib/queue";
 
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
-const db = new PrismaClient({ adapter });
-const connection = { url: process.env.REDIS_URL! };
-export const sendQueue = new Queue("deliveries", { connection });
-
-/**
- * Roda a cada minuto. Pega o que venceu e joga na fila.
- *
- * O UPDATE ... WHERE status = 'SCHEDULED' é a trava: se dois workers
- * subirem juntos, só um consegue mudar a linha, e o outro pega zero.
- */
-export async function enqueueDue() {
-  const due = await db.delivery.findMany({
-    where: { status: "SCHEDULED", scheduledAt: { lte: new Date() } },
-    take: 500,
-  });
-
-  for (const d of due) {
-    const claimed = await db.delivery.updateMany({
-      where: { id: d.id, status: "SCHEDULED" },
-      data: { status: "QUEUED" },
-    });
-    if (claimed.count === 0) continue;
-
-    await sendQueue.add("send", { deliveryId: d.id }, {
-      jobId: d.idempotencyKey,
-      attempts: 5,
-      backoff: { type: "exponential", delay: 30_000 },
-    });
-  }
-}
+export { enqueueDue } from "../lib/dispatch";
+export { sendQueue };
 
 export const dispatcher = new Worker(
   "deliveries",

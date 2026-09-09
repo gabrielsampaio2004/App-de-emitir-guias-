@@ -1,3 +1,6 @@
+// Precisa vir antes de qualquer import que leia process.env (db.ts, queue.ts):
+// ao contrário do `next dev`, o `tsx` não carrega o `.env` sozinho.
+import "dotenv/config";
 import { enqueueDue, dispatcher, sendQueue } from "./dispatcher";
 
 const TICK_MS = 60_000;

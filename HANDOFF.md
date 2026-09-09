@@ -3,10 +3,12 @@
 Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
-Estado: `npm run typecheck` passa limpo. `npm run dev` **ainda falha** — não
-existe `src/app/`.
+Estado: `npm run typecheck` passa limpo. `npm run dev` sobe. `npm run build`
+passa limpo (`/` como rota dinâmica). Etapa 2 implementada e verificada
+localmente (Postgres/Redis reais neste ambiente, sem R2/Meta reais — ver
+seção 5).
 
-Última atualização: 02/09/2026, após o commit `6a3238e`.
+Última atualização: 09/09/2026, etapa 2.
 
 ---
 
@@ -47,8 +49,9 @@ problemas de forma errada.
 
 ## 2. Bugs abertos
 
-Nenhum no momento. Todos os bugs confirmados por execução foram corrigidos.
-O que resta não é conserto, é construção: ver seções 3, 4 e 5.
+Nenhum no momento. Todos os bugs confirmados por execução foram corrigidos
+(incluindo dois novos, achados testando a etapa 2 — ver seção 5). O que
+resta não é conserto, é construção: ver seções 3, 4 e 5.
 
 ---
 
@@ -90,37 +93,74 @@ Não foram executados. Verifique cada um em vez de assumir.
 
 ## 5. O que construir, em ordem
 
-### Etapa 1 — fazer rodar  ← ATUAL
+### Etapa 1 — fazer rodar ✅
 
-Falta só o app Next. Crie `src/app/layout.tsx` e `src/app/page.tsx` mínimos.
-O Next 16 sobe sem `next.config.mjs`; só crie um se precisar de configuração.
-Lembre que `package.json` tem `"type": "module"`.
+Feito. `src/app/layout.tsx` e `src/app/page.tsx` mínimos criados nos commits
+anteriores. `npm run dev` sobe e responde em localhost:3000.
 
-Aceite: `npm run dev` sobe e responde em localhost:3000. (`npm run typecheck`
-limpo já está feito.)
+### Etapa 2 — provar o envio de ponta a ponta ✅ (até o limite de credenciais reais)
 
-### Etapa 2 — provar o envio de ponta a ponta
+Implementado e testado localmente nesta sessão contra Postgres e Redis reais
+(subidos no próprio ambiente — `service postgresql start` + `redis-server
+--daemonize yes`). **Não há R2 nem Meta reais disponíveis aqui**, então a
+etapa foi verificada até esse limite; falta rodar com credenciais reais para
+o aceite completo ("guia chega num WhatsApp real").
 
-Um tenant fixo em seed, um cliente cadastrado na mão, upload de um PDF, botão
-"enviar agora". **Sem agendamento ainda.** O objetivo é ver a guia chegar no
-WhatsApp e o webhook voltar `delivered`.
+O que foi construído:
+- `prisma/migrations/20260909180050_init/` — primeira migration, com o
+  `REVOKE UPDATE, DELETE ON "AuditLog" FROM PUBLIC;` que o `CLAUDE.md` exige.
+- `prisma/seed.ts` — tenant fixo, cliente com consentimento concedido,
+  `WhatsAppAccount` com token cifrado (usa `WHATSAPP_WABA_ID` /
+  `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_ACCESS_TOKEN` do ambiente; sem eles
+  grava placeholders e avisa). Rode com `npm run db:seed`.
+- `src/app/api/webhooks/whatsapp/route.ts` — `GET` responde o desafio de
+  verificação; `POST` valida `X-Hub-Signature-256` com `timingSafeEqual` antes
+  de processar, responde 200 e processa os `statuses[]` via `queueMicrotask`
+  (fora do ciclo do request). Grava `DeliveryEvent`, atualiza
+  `sentAt`/`deliveredAt`/`readAt`, nunca regride o status, e dedupa reentrega
+  do mesmo evento (mesma `delivery` + `type` + `timestamp` do payload).
+- `src/lib/db.ts`, `src/lib/queue.ts`, `src/lib/dispatch.ts` — extraídos de
+  `dispatcher.ts` para serem compartilhados entre o worker e a rota web
+  (`claimAndEnqueue` reaplica as duas travas contra envio duplicado — trava
+  de `status` e `idempotencyKey` — tanto no varredor de agendamento quanto no
+  botão "enviar agora").
+- `src/app/page.tsx` + `src/app/actions.ts` — formulário com seletor do
+  cliente (do seed) e upload de PDF; a *server action* `sendNow` sobe o
+  arquivo pro storage, cria `Document` + `Delivery` (`scheduledAt` = agora) e
+  o audit log na mesma transação, e manda pra fila.
 
-- **`src/app/api/webhooks/whatsapp/route.ts`** — `GET` responde o desafio de
-  verificação com `WHATSAPP_WEBHOOK_VERIFY_TOKEN`; `POST` processa os eventos e
-  valida a assinatura (ver regra no `CLAUDE.md`). Responda 200 rápido e processe
-  fora do request.
-- Grave `DeliveryEvent` para cada status e atualize `sentAt`/`deliveredAt`/`readAt`.
-- Webhooks da Meta **chegam fora de ordem e repetidos**. Nunca regrida o status
-  (`READ` não volta para `DELIVERED`) e trate reentrega do mesmo evento.
+Dois bugs achados **por execução** (não por inspeção) e corrigidos:
+1. **Regressão de status no webhook.** `STATUS_RANK` comparava `delivery.status`
+   (vem em maiúsculas do enum do Prisma — `"READ"`) contra chaves minúsculas
+   (`sent`/`delivered`/`read`). O rank atual sempre caía no fallback `0`, então
+   um evento `delivered` atrasado sobrescrevia um `READ` já gravado — exatamente
+   o que este documento pede pra nunca acontecer. Confirmado enviando a
+   sequência `delivered → read → delivered(atrasado)` pro webhook local e
+   vendo o status voltar pra `DELIVERED`; corrigido usando chaves maiúsculas
+   no mapa, reexecutado, e o status ficou em `READ` como deveria.
+2. **`npm run worker` não carregava `.env`.** O `next dev` carrega `.env`
+   sozinho; o `tsx src/workers/index.ts` não. O worker subia e tentava
+   conectar no Postgres sem `DATABASE_URL`, caindo pra um usuário/banco padrão
+   e levando "acesso negado". Corrigido com `import "dotenv/config"` como
+   primeiro import de `src/workers/index.ts`.
 
-Antes disso vai ser preciso rodar a primeira migration (`npm run db:migrate`),
-que exige um Postgres de verdade — hoje o `.env` aponta para um localhost que
-pode não existir.
+Testado e confirmado com o pipeline completo local (`enqueueDue` reivindica a
+`Delivery` `SCHEDULED`, o worker processa, chama `getObject`/Cloud API): falha
+exatamente na chamada ao R2 (`R2_ACCOUNT_ID não definida`), que é a fronteira
+esperada sem credencial real — nenhuma linha órfã ficou no banco.
 
-Aceite: uma guia real chega num WhatsApp real e o banco registra
-`sent` → `delivered`.
+`npm run build` também passa; `/` precisou de `export const dynamic =
+"force-dynamic"` porque lê o banco a cada request e o Next ia
+pré-renderizá-la como estática no build, congelando os dados.
 
-### Etapa 3 — o produto
+**Falta para o aceite 100%:** credenciais reais da Meta (`WHATSAPP_WABA_ID`,
+`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, template aprovado
+`envio_guia_fiscal` categoria UTILITY) e do R2 (`R2_ACCOUNT_ID`,
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`), rodar o seed de novo
+com elas, subir `npm run dev` + `npm run worker`, e clicar "enviar agora" de
+verdade.
+
+### Etapa 3 — o produto  ← ATUAL
 
 - Upload de pasta inteira via `<input type="file" webkitdirectory />`.
 - Matching automático pelo `parseFilename`; o que não casar vai para fila de
