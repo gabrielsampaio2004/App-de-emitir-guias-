@@ -212,7 +212,13 @@ O que foi construído:
   do worker, igual qualquer outra `Delivery` agendada.
 - **`src/app/configuracoes/`** — formulário pra trocar a regra do tenant.
 - **`src/app/log/`** — leitura de `AuditLog` e `DeliveryEvent`, só leitura.
-- Nav simples em `layout.tsx` ligando as cinco telas.
+- **`src/app/clientes/`** — ativar/desativar cliente. O campo `Client.active`
+  existia no schema desde o começo mas não tinha nenhuma tela; a coluna
+  "guias agendadas" mostra o que você perde ao desativar. Desativar **não**
+  cancela na hora as `Delivery`s já agendadas: quem garante que nada sai é o
+  `dispatcher`, que recusa cliente inativo no momento do envio (mesma lógica
+  do consentimento revogado). Reativar não ressuscita o que já foi cancelado.
+- Nav simples em `layout.tsx` ligando as seis telas.
 
 **Bug achado por execução (não por inspeção) e corrigido:** testando o fluxo
 de revisão no navegador, uma aba com a página desatualizada conseguiu confirmar

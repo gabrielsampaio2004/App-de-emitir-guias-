@@ -42,14 +42,26 @@ export default async function RevisaoPage() {
                 <td>{doc.filename}</td>
                 <td>{doc.kind ?? "-"}</td>
                 <td>{doc.competencia ?? "-"}</td>
-                <td>{doc.client ? `${doc.client.name} (automático)` : "não reconhecido"}</td>
+                {/* Cliente que casou automático mas foi desativado depois não
+                    pode ser sugerido: ele nem aparece na lista de opções. */}
+                <td>
+                  {!doc.client
+                    ? "não reconhecido"
+                    : doc.client.active
+                      ? `${doc.client.name} (automático)`
+                      : `${doc.client.name} — desativado, escolha outro`}
+                </td>
                 <td>
                   <form
                     action={confirmDocument}
                     style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
                   >
                     <input type="hidden" name="documentId" value={doc.id} />
-                    <select name="clientId" defaultValue={doc.clientId ?? ""} required>
+                    <select
+                      name="clientId"
+                      defaultValue={doc.client?.active ? doc.client.id : ""}
+                      required
+                    >
                       <option value="" disabled>
                         selecione
                       </option>

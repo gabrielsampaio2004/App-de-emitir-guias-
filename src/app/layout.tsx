@@ -8,6 +8,7 @@ const NAV_LINKS = [
   { href: "/", label: "Enviar agora" },
   { href: "/lote", label: "Upload em lote" },
   { href: "/revisao", label: "Fila de revisão" },
+  { href: "/clientes", label: "Clientes" },
   { href: "/configuracoes", label: "Configurações" },
   { href: "/log", label: "Log" },
 ];

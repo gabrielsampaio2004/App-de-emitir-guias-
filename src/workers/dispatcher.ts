@@ -10,6 +10,30 @@ import { connection, sendQueue } from "../lib/queue";
 export { enqueueDue } from "../lib/dispatch";
 export { sendQueue };
 
+/**
+ * Cancela um envio antes de chamar a Meta (cliente desativado, consentimento
+ * revogado). O log de auditoria vai na mesma transação da mudança de status,
+ * como manda o CLAUDE.md — antes o cancelamento por falta de consentimento
+ * mudava o status sem deixar rastro nenhum.
+ */
+async function cancelDelivery(deliveryId: string, tenantId: string, motivo: string) {
+  await db.$transaction(async (tx) => {
+    await tx.delivery.update({
+      where: { id: deliveryId },
+      data: { status: "CANCELLED", lastError: motivo },
+    });
+    await tx.deliveryEvent.create({
+      data: { deliveryId, type: "cancelled", payload: { motivo } },
+    });
+    await audit(tx, { tenantId, actorLabel: "system:dispatcher" }, {
+      action: "delivery.cancelled",
+      entityType: "Delivery",
+      entityId: deliveryId,
+      after: { motivo },
+    });
+  });
+}
+
 export const dispatcher = new Worker(
   "deliveries",
   async (job) => {
@@ -26,15 +50,18 @@ export const dispatcher = new Worker(
       return; // já resolvido, nada a fazer
     }
 
+    // Cliente desativado depois do agendamento? Não envia.
+    if (!delivery.client.active) {
+      await cancelDelivery(delivery.id, delivery.tenantId, "Cliente desativado");
+      return;
+    }
+
     // Consentimento revogado depois do agendamento? Não envia.
     const consent = await db.consent.findFirst({
       where: { clientId: delivery.clientId, status: "GRANTED" },
     });
     if (!consent) {
-      await db.delivery.update({
-        where: { id: delivery.id },
-        data: { status: "CANCELLED", lastError: "Sem consentimento ativo" },
-      });
+      await cancelDelivery(delivery.id, delivery.tenantId, "Sem consentimento ativo");
       return;
     }
 
