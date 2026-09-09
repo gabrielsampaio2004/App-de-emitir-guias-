@@ -12,6 +12,52 @@ reais — ver seção 5).
 
 ---
 
+## 0. Subir o projeto numa máquina nova
+
+Levantado rodando de verdade num Debian 13 com Postgres 17. Na ordem:
+
+```bash
+cp .env.example .env
+
+# Postgres: o .env conecta por TCP com senha, mas o pacote Debian instala
+# com autenticação peer e sem senha no usuário postgres. Sem este ALTER, a
+# conexão falha mesmo com o banco criado.
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+sudo -u postgres createdb guiazap
+psql "postgresql://postgres:postgres@localhost:5432/guiazap" -c "SELECT 1;"
+
+# Chave que cifra o accessToken da Meta. O seed falha sem ela.
+# GUARDE: trocar depois de semear torna o token no banco indecifrável.
+openssl rand -hex 32   # cole em ENCRYPTION_KEY no .env
+
+sudo apt install -y redis-server && sudo systemctl enable --now redis-server
+
+npm install
+npm run db:deploy   # aplica as migrations; `db:migrate` é pra CRIAR migration nova
+npm run db:seed
+```
+
+Confira as duas travas que precisam ter sobrevivido às migrations:
+
+```bash
+psql "postgresql://postgres:postgres@localhost:5432/guiazap" -c '\dp "AuditLog"'
+# PUBLIC não pode aparecer com privilégio (append-only)
+psql "postgresql://postgres:postgres@localhost:5432/guiazap" -c '\d "Delivery"' | grep -i unique
+# tem que existir Delivery_documentId_key UNIQUE
+```
+
+Depois: `npm run dev` (web) e `npm run worker` (dispatcher, processo separado).
+
+⚠️ O CLI do Prisma sugere atualizar para `8.0.0-rc.13` a cada comando.
+**Ignore** — é a armadilha documentada no `CLAUDE.md`; a versão é pinada de
+propósito.
+
+Segredo nenhum vai para o GitHub, nem para GitHub Secrets: não há workflow de
+CI neste repositório, e o app lê o `.env` local. Secrets guardados lá são
+invisíveis para a aplicação.
+
+---
+
 ## 1. Feito (não refazer)
 
 Registrado porque a versão anterior deste documento descrevia alguns destes
