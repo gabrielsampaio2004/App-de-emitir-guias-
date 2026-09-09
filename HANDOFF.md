@@ -3,14 +3,16 @@
 Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
-Estado: `npm run typecheck` passa limpo. `npm run dev` **ainda falha** — não
-existe `src/app/`.
+Estado: `npm run typecheck` passa limpo. `npm run dev` sobe e responde (Etapa 1
+concluída). Etapa 2 (envio de ponta a ponta) está implementada e verificada
+localmente — falta só a validação com Meta/R2 reais, que este ambiente não
+alcança (ver seção 5, Etapa 2).
 
-Última atualização: 03/09/2026, depois de uma revisão externa que apontou 8
-problemas. Cinco foram corrigidos nesta rodada (itens 4, 5, 6, 7a do relato —
-ver seção 2). **Achado importante: a revisão descrevia um commit anterior
-que corrige falso positivo de código de barras no `filename.ts` como já
-aplicado — não está. Ver seção 2.1.**
+Última atualização: 09/09/2026. Implementada a Etapa 2 inteira (migration
+real, webhook com validação de assinatura, seed, upload + "enviar agora").
+Ver seção 5 para o relato completo. **A seção 2.1 (achado sobre o "já feito"
+que não estava no `filename.ts`) continua válida e sem novidade** — não foi
+mexida nesta rodada.
 
 ---
 
@@ -253,37 +255,137 @@ não algo pra eu assumir sozinho):
 
 ## 5. O que construir, em ordem
 
-### Etapa 1 — fazer rodar  ← ATUAL
+### Etapa 1 — fazer rodar ✅ concluída
 
-Falta só o app Next. Crie `src/app/layout.tsx` e `src/app/page.tsx` mínimos.
-O Next 16 sobe sem `next.config.mjs`; só crie um se precisar de configuração.
-Lembre que `package.json` tem `"type": "module"`.
+`src/app/layout.tsx` e `src/app/page.tsx` existiam desde antes desta rodada
+(commits `e87aa49`/`c7cb484`, anteriores à sessão que corrigiu os itens 4-7a —
+o HANDOFF ficou desatualizado dizendo que faltava fazer isso; confirmado por
+execução: `npm run dev` sobe com Turbopack e responde 200 em localhost:3000).
 
-Aceite: `npm run dev` sobe e responde em localhost:3000. (`npm run typecheck`
-limpo já está feito.)
+### Etapa 2 — provar o envio de ponta a ponta ✅ implementada e verificada localmente
 
-### Etapa 2 — provar o envio de ponta a ponta
+**O que foi construído:**
+- **Migration real** — `prisma/migrations/20260903183454_init/`. Gerada com
+  `prisma migrate dev --create-only` e editada à mão pra incluir
+  `REVOKE UPDATE, DELETE ON "AuditLog" FROM PUBLIC;` no final (regra do
+  CLAUDE.md). **Ressalva importante, documentada como comentário na própria
+  migration:** REVOKE não tem efeito sobre roles `SUPERUSER` — o Postgres
+  ignora GRANT/REVOKE pra elas. Em dev local, a role usual (`postgres`) é
+  superuser, então essa trava fica sem efeito observável ali. Testei isso na
+  prática: criei uma role comum, dei só `SELECT, INSERT` na `AuditLog`, e um
+  `DELETE` por essa role deu `permission denied for table AuditLog` — a trava
+  funciona. **Mas isso só protege de verdade se, em produção, a role da
+  aplicação NÃO for superuser.** Se ninguém decidir isso explicitamente, a
+  trava do CLAUDE.md existe só no papel.
+- **`prisma/seed.ts`** (+ `migrations.seed` em `prisma.config.ts`, rodável via
+  `npx prisma db seed`) — cria um tenant fixo e um cliente (CPF/CNPJ de teste,
+  conferidos contra o `isValidCPF`/`isValidCNPJ` do próprio projeto antes de
+  escrever o arquivo) e o `Consent` `GRANTED`. Exige `SEED_CLIENT_PHONE` (não
+  inventa número). Só cria `WhatsAppAccount` se `SEED_WA_WABA_ID`,
+  `SEED_WA_PHONE_NUMBER_ID`, `SEED_WA_DISPLAY_PHONE` e `SEED_WA_ACCESS_TOKEN`
+  vierem no ambiente — nunca pede nem inventa credencial da Meta.
+- **`src/app/api/webhooks/whatsapp/route.ts`** — `GET` responde o desafio
+  (`hub.mode`/`hub.verify_token`/`hub.challenge`) comparando o token com
+  `timingSafeEqual`. `POST` confere `X-Hub-Signature-256` com HMAC-SHA256 +
+  `timingSafeEqual` sobre o corpo bruto (`request.text()`, antes de qualquer
+  `JSON.parse`) — sem assinatura válida, `401` direto, nada é processado.
+  Assinatura válida → enfileira na fila `webhook-events` e responde `200`
+  imediatamente; quem escreve no banco é o worker separado, fora do request.
+- **`src/lib/whatsapp/webhook.ts`** — `verifySignature`, `extractStatusEvents`
+  (parsing tolerante do payload da Meta) e `nextDeliveryStatus` (a regra de
+  não regressão: `sent < delivered < read`; `failed` só é aceito se a entrega
+  ainda não passou de `sent` — um `failed` atrasado depois de `delivered`/`read`
+  é ignorado).
+- **`src/workers/webhook-dispatcher.ts`** — worker que consome `webhook-events`:
+  acha o `Delivery` pelo `waMessageId`, grava um `DeliveryEvent` bruto pra
+  TODO evento recebido (inclusive duplicata/fora de ordem — é o histórico
+  técnico), e só avança `status`+timestamp+`AuditLog` (na mesma transação,
+  seguindo a regra do CLAUDE.md — aqui não tem o conflito que forçou a exceção
+  no item 4, porque não há reenvio em jogo) quando `nextDeliveryStatus`
+  autoriza. Zero matches pelo `waMessageId` → loga aviso e segue (pode ser
+  webhook de outro ambiente). Mais de um match → **achado**: `waMessageId` não
+  é `@unique` no schema; se algum dia acontecer, o worker loga erro e não
+  adivinha qual atualizar, mas o schema não impede a ambiguidade acontecer. Não
+  mudei o schema pra corrigir isso — é a mesma cautela da rodada anterior com
+  schema, fica registrado aqui em vez de mexido em silêncio.
+- **`src/lib/db.ts`** — `PrismaClient` compartilhado (cacheado em `globalThis`
+  em dev) pras rotas do Next, pra não abrir conexão nova a cada hot-reload.
+- **`src/app/api/clients/route.ts`** (`GET`) e **`src/app/api/deliveries/route.ts`**
+  (`GET`/`POST`) — o `POST` recebe o PDF direto (multipart), sem matching
+  automático (isso é Etapa 3): valida cliente e consentimento ativo (mesma
+  regra do item 6 — `status GRANTED` **e** `revokedAt: null`), sobe pro R2
+  (`putObject`), cria `Document` (a trava `@@unique([tenantId, sha256])` do
+  schema faz o trabalho de impedir reenvio do mesmo arquivo — testei, dá
+  `409`) e um `Delivery` já `SCHEDULED` pra agora. **Não enfileira na hora** —
+  quem pega isso é o `enqueueDue()` do worker, no tick seguinte (até 60s). Não
+  criei um caminho de disparo imediato porque isso exigiria a rota da web
+  importar `dispatcher.ts`, que tem `export const dispatcher = new Worker(...)`
+  como efeito colateral de módulo — importar isso no processo do Next faria o
+  processo web também processar a fila de envio, misturando os dois processos
+  que o CLAUDE.md separa de propósito (`workers/index.ts` é o processo do
+  worker). Troquei imediatismo por manter a separação de processos; se o botão
+  "enviar agora" precisar ser realmente instantâneo, isso é decisão de
+  arquitetura pra discutir, não algo pra eu resolver sozinho.
+- **`src/app/enviar/page.tsx` + `UploadForm.tsx`** — UI mínima: lista clientes
+  (via `/api/clients`), formulário com seleção de cliente, tipo (dropdown dos
+  `KINDS`), competência, vencimento e o PDF. Não toquei em `src/app/page.tsx`
+  (raiz, já validado na Etapa 1).
+- `src/workers/index.ts` agora também sobe e fecha o `webhookDispatcher`/`webhookQueue`
+  junto com o `dispatcher`/`sendQueue` existentes.
 
-Um tenant fixo em seed, um cliente cadastrado na mão, upload de um PDF, botão
-"enviar agora". **Sem agendamento ainda.** O objetivo é ver a guia chegar no
-WhatsApp e o webhook voltar `delivered`.
+**O que NÃO foi implementado, de propósito:** autenticação (`better-auth` seguia
+sem uso antes desta rodada e continua assim — o enunciado da Etapa 2 no HANDOFF
+não pede login, só "tenant fixo em seed, cliente cadastrado na mão", e
+implementar auth de verdade é escopo bem maior que isso pediu).
 
-- **`src/app/api/webhooks/whatsapp/route.ts`** — `GET` responde o desafio de
-  verificação com `WHATSAPP_WEBHOOK_VERIFY_TOKEN`; `POST` processa os eventos e
-  valida a assinatura (ver regra no `CLAUDE.md`). Responda 200 rápido e processe
-  fora do request.
-- Grave `DeliveryEvent` para cada status e atualize `sentAt`/`deliveredAt`/`readAt`.
-- Webhooks da Meta **chegam fora de ordem e repetidos**. Nunca regrida o status
-  (`READ` não volta para `DELIVERED`) e trate reentrega do mesmo evento.
+**O que executei pra verificar** (tudo com Postgres 16 e Redis 7 locais, subidos
+nesta sessão via `pg_ctlcluster`/`redis-server`):
+1. `npx prisma migrate dev --create-only` + edição manual do SQL + `npx prisma migrate dev`
+   → migration aplicada de verdade num banco limpo (`guiazap`, recriado do
+   zero pra isso). Confirmei o `REVOKE` funcionando com uma role de teste
+   não-superuser (`permission denied for table AuditLog` num `DELETE`).
+2. `SEED_CLIENT_PHONE=... npx prisma db seed` → rodou via
+   `prisma.config.ts`/`migrations.seed`, criou tenant+client+consent,
+   confirmou que não cria `WhatsAppAccount` sem as credenciais.
+3. Script de integração ad hoc (não versionado, mesma prática das rodadas
+   anteriores — não há test runner) rodando os módulos de verdade (rotas do
+   Next chamadas diretamente como funções, `dispatcher.ts`,
+   `webhook-dispatcher.ts`) contra um banco de teste clonado do schema
+   migrado, com `fetch` e `S3Client.prototype.send` mockados — as duas únicas
+   dependências externas que este ambiente não alcança (ver item 6 abaixo).
+   **24/24 asserções passaram**, cobrindo: listagem de clientes; upload
+   bloqueado por falta de consentimento (`422`, nada gravado); upload +
+   dedup por sha256 (`409` na segunda vez); `enqueueDue` + dispatcher enviando
+   de verdade (`SENT` + `waMessageId`); desafio `GET` do webhook (token certo
+   e errado); `POST` com assinatura inválida ou ausente (`401`, nada
+   alterado); progressão `SENT → DELIVERED → READ`; evento duplicado
+   (idempotente, não regride, mas fica registrado no `DeliveryEvent`);
+   evento atrasado chegando depois de um mais avançado (`delivered` depois de
+   `read` — ignorado, não regride); `waMessageId` desconhecido (`200`, loga
+   aviso, não quebra).
+4. `npm run dev` real (não o script) contra o banco `guiazap` migrado e
+   seedado: `/` → 200, `/enviar` → 200, `/api/clients` → retornou o cliente
+   seedado de verdade, `GET` do webhook sem `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+   configurado → 403 (falha fechada por padrão, não abre sozinho).
+5. `npm run worker` real: sobe, loga `[worker] iniciado`, responde a
+   `SIGTERM` com desligamento gracioso dos dois workers.
+6. `npm run typecheck` limpo em todos os passos.
 
-Antes disso vai ser preciso rodar a primeira migration (`npm run db:migrate`),
-que exige um Postgres de verdade — hoje o `.env` aponta para um localhost que
-pode não existir.
+**O que este ambiente não consegue validar** (mesma limitação já registrada na
+checagem de prontidão): chamada real a `graph.facebook.com` e
+`cloudflarestorage.com` — bloqueadas pelo proxy de rede desta sessão. Ou seja,
+a lógica de negócio inteira (envio, webhook, não-regressão, idempotência) está
+provada; o que falta é literalmente só a Meta e o R2 responderem de verdade —
+isso precisa acontecer fora deste ambiente, com credenciais reais, antes de
+considerar a Etapa 2 fechada de fato. O critério de aceite original ("uma guia
+real chega num WhatsApp real") continua pendente por esse motivo, não por
+falha de implementação.
 
-Aceite: uma guia real chega num WhatsApp real e o banco registra
-`sent` → `delivered`.
+Artefatos de teste (bancos `guiazap_test`, script `.scratch-*.mts`, role de
+teste no Postgres) foram todos limpos/removidos ao final — não sobra nada
+fora do que está listado acima como criado.
 
-### Etapa 3 — o produto
+### Etapa 3 — o produto  ← ATUAL
 
 - Upload de pasta inteira via `<input type="file" webkitdirectory />`.
 - Matching automático pelo `parseFilename`; o que não casar vai para fila de

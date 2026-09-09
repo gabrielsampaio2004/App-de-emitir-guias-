@@ -1,4 +1,5 @@
 import { enqueueDue, recoverStuckDeliveries, dispatcher, sendQueue } from "./dispatcher";
+import { webhookDispatcher, webhookQueue } from "./webhook-dispatcher";
 
 const TICK_MS = 60_000;
 
@@ -27,6 +28,8 @@ async function shutdown(signal: string) {
   clearInterval(timer);
   await dispatcher.close();   // espera os jobs em voo terminarem
   await sendQueue.close();
+  await webhookDispatcher.close();
+  await webhookQueue.close();
   process.exit(0);
 }
 
