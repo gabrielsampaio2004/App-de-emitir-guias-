@@ -223,6 +223,32 @@ O R2 **já foi verificado** contra bucket real e não é mais fronteira.
 
 ---
 
+## Como conduzir as sessões
+
+**Uma etapa por sessão.** Este arquivo cobre seis, mas executá-las de uma vez
+enche o contexto e a qualidade cai justamente no fim, quando vem a parte
+difícil. A etapa B mexe em schema de usuário e isolamento entre escritórios —
+erro ali é caro.
+
+Ordem sugerida: **A** (fecha o último furo conhecido no caminho do dinheiro),
+**C** e **D** (curtas, e a D destrava testar a Meta mais cedo), **B** (a maior),
+**E**, e por fim **F**, que depende de credencial.
+
+Comece cada sessão com `git pull`, e no fim de cada etapa confira antes de
+seguir para a próxima:
+
+- o aceite da etapa foi de fato executado, com a saída do comando à vista;
+- `npm run typecheck` e `npm run build` limpos;
+- se mexeu em schema, as migrations aplicam num banco novo;
+- o `HANDOFF.md` foi atualizado — decisão tomada, o que foi verificado e como.
+  Uma etapa fechada sem esse registro obriga a próxima sessão a redescobrir
+  tudo.
+
+Se uma sessão terminar no meio de uma etapa, anote no `HANDOFF.md` onde parou
+antes de encerrar.
+
+---
+
 ## Armadilhas deste repositório
 
 Todas custaram tempo de verdade. Não redescubra.
