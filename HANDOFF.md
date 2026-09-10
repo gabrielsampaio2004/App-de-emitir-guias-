@@ -12,11 +12,13 @@ Estado: `npm run typecheck`, `npm run build` e `npm test` passam limpos
 (todas as rotas dinâmicas; 20 testes, `node:test` nativo). Etapas 1, 2 e 3
 implementadas e verificadas contra Postgres, Redis e **R2 reais**. Para o
 aceite ponta a ponta falta só o lado da Meta (seção 5). Sem bug sério aberto
-no caminho do envio — a Etapa A do `EXECUCAO.md` (envio duplicado) e a Etapa C
-(testes automatizados) fecharam em sessões anteriores (seções 3 e 4); a
-Etapa D (nome do template configurável) fechou nesta, ver seção 5 (Etapa 2).
+no caminho do envio — Etapas A, C e D do `EXECUCAO.md` fechadas em sessões
+anteriores: A (envio duplicado) na seção 4, C (testes automatizados) na
+seção 3, D (nome do template configurável) na seção 5 (Etapa 2).
 
-Última atualização: 10/09/2026, Etapa D do `EXECUCAO.md` fechada.
+Última atualização: 10/09/2026 — reverificado nesta sessão (`npm run
+typecheck`, `npm test`, `npm run build` limpos); nenhum código mudou desde a
+Etapa D, só esta checagem.
 
 ---
 
