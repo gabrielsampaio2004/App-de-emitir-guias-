@@ -3,6 +3,11 @@
 Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
+Para *executar* o que ainda falta, veja o `EXECUCAO.md`: ele detalha cada
+etapa aberta com aceite, armadilhas e as decisões já tomadas. É um arquivo
+descartável — quando as etapas fecharem, o registro volta para cá e ele é
+apagado.
+
 Estado: `npm run typecheck` e `npm run build` passam limpos (todas as rotas
 dinâmicas), `npm run dev` sobe. Etapas 1, 2 e 3 implementadas e verificadas
 contra Postgres, Redis e **R2 reais**. Falta só o lado da Meta para o aceite
