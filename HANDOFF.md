@@ -272,8 +272,9 @@ precisa ser um número dessa lista.
 
 ### Etapa 3 — o produto ✅ (até o limite de credenciais reais)
 
-Implementada e testada localmente (Postgres/Redis reais, sem R2/Meta reais —
-mesma fronteira da etapa 2). Três decisões de produto que não estavam
+Implementada e testada localmente contra Postgres e Redis reais. O R2 era a
+fronteira quando isto foi escrito, mas foi verificado depois (10/09/2026): só
+a Meta continua faltando. Três decisões de produto que não estavam
 escritas foram tomadas com o usuário antes de mexer no schema — registradas
 aqui porque não têm como ficar óbvias só lendo o código:
 
