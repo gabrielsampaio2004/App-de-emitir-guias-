@@ -18,7 +18,13 @@ export class MetaCloudProvider implements WhatsAppProvider {
   constructor(
     private readonly phoneNumberId: string,
     private readonly accessToken: string,
-    /** Nome do template aprovado, categoria UTILITY, com header DOCUMENT */
+    /**
+     * Nome do template aprovado no painel da Meta, categoria UTILITY, com
+     * header DOCUMENT — a categoria é escolhida lá, não aqui. Configurável
+     * por ambiente via WHATSAPP_TEMPLATE_NAME (`src/workers/dispatcher.ts`);
+     * o dispatcher nunca cria o provider sem esse argumento, mas o default
+     * aqui garante o mesmo template de antes se a chamada mudar.
+     */
     private readonly templateName = "envio_guia_fiscal",
     private readonly templateLang = "pt_BR",
   ) {}

@@ -12,11 +12,11 @@ Estado: `npm run typecheck`, `npm run build` e `npm test` passam limpos
 (todas as rotas dinâmicas; 20 testes, `node:test` nativo). Etapas 1, 2 e 3
 implementadas e verificadas contra Postgres, Redis e **R2 reais**. Para o
 aceite ponta a ponta falta só o lado da Meta (seção 5). Sem bug sério aberto
-no caminho do envio — a Etapa A do `EXECUCAO.md` (envio duplicado) fechou
-numa sessão anterior (seção 4); a Etapa C (testes automatizados) fechou
-nesta, ver seção 3.
+no caminho do envio — a Etapa A do `EXECUCAO.md` (envio duplicado) e a Etapa C
+(testes automatizados) fecharam em sessões anteriores (seções 3 e 4); a
+Etapa D (nome do template configurável) fechou nesta, ver seção 5 (Etapa 2).
 
-Última atualização: 10/09/2026, Etapa C do `EXECUCAO.md` fechada.
+Última atualização: 10/09/2026, Etapa D do `EXECUCAO.md` fechada.
 
 ---
 
@@ -376,6 +376,37 @@ produção: o token temporário da tela "API Setup" **expira em 24h** (para vale
 é preciso um token de System User), e o número de teste só entrega para
 destinatários previamente verificados no painel — por isso `SEED_CLIENT_PHONE`
 precisa ser um número dessa lista.
+
+**Nome do template configurável — Etapa D do `EXECUCAO.md`, feita em
+10/09/2026 ✅.** Antes, `MetaCloudProvider.templateName` só tinha o default
+fixo `"envio_guia_fiscal"` no construtor e o dispatcher nunca passava outro —
+não dava pra testar a conexão com a Meta com um template já aprovado antes de
+`envio_guia_fiscal` passar pela aprovação (que leva horas). Agora
+`src/workers/dispatcher.ts` lê `WHATSAPP_TEMPLATE_NAME` do ambiente ao montar
+o provider, com `||` (não `??`) para o default — mesma lição do bug aberto do
+`seed.ts` na seção 2: variável presente mas vazia no `.env` não pode vencer o
+default. Documentada em `.env.example`, com nota de que é lida direto pelo
+dispatcher (dá pra trocar sem rodar `npm run db:seed` de novo, diferente das
+outras variáveis `WHATSAPP_*`).
+
+Não mexi na decisão travada de categoria: `MetaCloudProvider` continua sem
+nenhum parâmetro de categoria — UTILITY/MARKETING é escolha exclusiva do
+painel da Meta ao aprovar o template, e o código não introduz nada que
+facilite apontar para um template MARKETING.
+
+**Verificado por execução** (sem credencial real da Meta, que não existe
+neste ambiente): script chamou `MetaCloudProvider.sendDocument` de verdade
+com `global.fetch` stubado (só a rede foi trocada — a classe real, o
+construtor real e a mesma expressão `process.env.WHATSAPP_TEMPLATE_NAME ||
+undefined` que o dispatcher usa, todos de verdade) e capturou o `template.name`
+no corpo da chamada a `/messages` em três cenários:
+`WHATSAPP_TEMPLATE_NAME="teste_template_configuravel"` → enviou
+`teste_template_configuravel`; `WHATSAPP_TEMPLATE_NAME=""` → caiu no default
+`envio_guia_fiscal`; variável ausente → também caiu no default. Script era
+scratch, apagado depois — não versionado.
+
+`npm run typecheck`, `npm test` (as 20 suítes da Etapa C não regrediram) e
+`npm run build` limpos depois da mudança.
 
 ### Etapa 3 — o produto ✅ (até o limite de credenciais reais)
 

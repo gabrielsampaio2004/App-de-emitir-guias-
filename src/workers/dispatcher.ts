@@ -114,6 +114,9 @@ export const dispatcher = new Worker(
     const provider = new MetaCloudProvider(
       wa.phoneNumberId,
       decrypt(wa.accessTokenEnc),
+      // `||`, não `??`: WHATSAPP_TEMPLATE_NAME="" (não preenchida) tem que
+      // cair no default, e string vazia não é null/undefined pro `??`.
+      process.env.WHATSAPP_TEMPLATE_NAME || undefined,
     );
 
     await db.delivery.update({

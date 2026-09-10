@@ -187,6 +187,10 @@ nenhuma dependência nova no `package.json`.
 
 ## Etapa D — nome do template configurável (curta)
 
+**✅ Fechada em 10/09/2026 — ver seção 5 (Etapa 2) do `HANDOFF.md` para a
+mudança e a verificação.** O resto desta seção fica como registro do
+raciocínio original; não reabra sem motivo.
+
 O `MetaCloudProvider` tem `templateName = "envio_guia_fiscal"` fixo como
 default no construtor, e o dispatcher nunca passa outro. Isso impede testar a
 conexão com a Meta antes de o template estar aprovado — e a aprovação leva
