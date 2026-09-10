@@ -8,13 +8,15 @@ etapa aberta com aceite, armadilhas e as decisões já tomadas. É um arquivo
 descartável — quando as etapas fecharem, o registro volta para cá e ele é
 apagado.
 
-Estado: `npm run typecheck` e `npm run build` passam limpos (todas as rotas
-dinâmicas), `npm run dev` sobe. Etapas 1, 2 e 3 implementadas e verificadas
-contra Postgres, Redis e **R2 reais**. Para o aceite ponta a ponta falta só o
-lado da Meta (seção 5). Sem bug sério aberto no caminho do envio — a Etapa A
-do `EXECUCAO.md` (envio duplicado) fechou nesta sessão, ver seção 4.
+Estado: `npm run typecheck`, `npm run build` e `npm test` passam limpos
+(todas as rotas dinâmicas; 20 testes, `node:test` nativo). Etapas 1, 2 e 3
+implementadas e verificadas contra Postgres, Redis e **R2 reais**. Para o
+aceite ponta a ponta falta só o lado da Meta (seção 5). Sem bug sério aberto
+no caminho do envio — a Etapa A do `EXECUCAO.md` (envio duplicado) fechou
+numa sessão anterior (seção 4); a Etapa C (testes automatizados) fechou
+nesta, ver seção 3.
 
-Última atualização: 10/09/2026, Etapa A do `EXECUCAO.md` fechada.
+Última atualização: 10/09/2026, Etapa C do `EXECUCAO.md` fechada.
 
 ---
 
@@ -69,8 +71,8 @@ invisíveis para a aplicação.
 Registrado porque a versão anterior deste documento descrevia alguns destes
 problemas de forma errada.
 
-- **`filename.ts` TS2532** — corrigido com `w[i] ?? 0`. ⚠️ Os cinco casos da
-  tabela na seção 3 **ainda não viraram teste automatizado** (não há test runner).
+- **`filename.ts` TS2532** — corrigido com `w[i] ?? 0`. Os cinco casos da
+  tabela na seção 3 **agora são teste automatizado** — ver seção 3.
 - **`split(" ")[0]` no `dispatcher.ts`** — era o item "não verificado" da lista
   antiga. Confirmou-se; corrigido com fallback para o nome completo.
 - **`new Blob([file])` com `Buffer`** — também era "não verificado". Confirmou-se
@@ -92,8 +94,8 @@ problemas de forma errada.
 - **`scrub` no `audit/index.ts`** — os três defeitos foram corrigidos. Agora é
   recursiva (segredo aninhado em qualquer profundidade vira `[redacted]`),
   preserva arrays, converte `Date` para ISO e `bigint` para string, com limite
-  de 20 níveis contra estruturas circulares. Verificada com 14 casos. ⚠️ Os
-  testes rodaram fora do projeto e **não estão versionados** — ver seção 3.
+  de 20 níveis contra estruturas circulares. Verificada com 14 casos
+  manualmente, e agora com teste automatizado versionado — ver seção 3.
 - **`src/lib/crypto.ts` e `src/lib/storage.ts`** — criados. O `crypto.ts` foi
   testado funcionalmente: cifra, decifra e rejeita dado adulterado.
 
@@ -132,28 +134,66 @@ conserto, é construção: ver seções 3 e 5.
 
 ---
 
-## 3. Testes — decidido em 10/09/2026
+## 3. Testes — feito em 10/09/2026 (Etapa C do `EXECUCAO.md`) ✅
 
-Não há test runner no `package.json`. Instalar era decisão de arquitetura e
+Não havia test runner no `package.json`. Instalar era decisão de arquitetura e
 estava condicionada a perguntar antes; **foi perguntado e autorizado pelo dono
 do projeto em 10/09/2026**, com a condição de usar o `node:test` nativo, que
-não adiciona dependência. Execução na etapa C do `EXECUCAO.md`.
+não adiciona dependência — e é exatamente o que foi usado. Nenhuma dependência
+nova entrou no `package.json` (conferido com `git diff package.json` antes de
+commitar: só a linha do script `test`).
 
 Qualquer outra dependência continua exigindo perguntar antes.
 
-Quando houver runner, estes cinco casos do `parseFilename` já passavam e não
-podem regredir:
+**`npm test` roda `tsx --test 'src/**/*.test.ts'`.** `tsx` já era
+devDependency (usado pelo worker). O glob entre aspas simples é proposital:
+sem aspas o shell (`dash`, que é o `/bin/sh` do Debian — bash só expande `**`
+com `globstar` habilitado) tentaria expandir antes de chamar o `tsx`, e podia
+não casar nada; citado, o padrão chega inteiro no test runner do Node, que
+sabe expandir glob nativamente.
 
-| entrada | `document` | `kind` | `competencia` |
-|---|---|---|---|
-| `DAS_11222333000181_2026-08.pdf` | `11222333000181` | `DAS` | `2026-08` |
-| `darf-529.982.247-25-082026.pdf` | `52998224725` | `DARF` | `2026-08` |
-| `11222333000181 - FGTS - 08_2026.pdf` | `11222333000181` | `FGTS` | `2026-08` |
-| `guia sem nada.pdf` | `null` | `null` | `null` |
-| `boleto protocolo 99999999999999 08-2026.pdf` | `null` | `BOLETO` | `2026-08` |
+Quatro suítes, 20 testes, todos passando:
 
-A última linha é a que importa: 14 dígitos que **não** são CNPJ válido devem ser
-rejeitados.
+- **`src/lib/matching/filename.test.ts`** — os cinco casos obrigatórios da
+  tabela abaixo, mais dois extras (CNPJ inválido isolado, CPF com todos os
+  dígitos iguais). O quinto caso da tabela é o que mais importa: 14 dígitos
+  que não formam CNPJ válido não podem virar `document` — é a trava contra
+  mandar a guia do João para a Maria.
+
+  | entrada | `document` | `kind` | `competencia` |
+  |---|---|---|---|
+  | `DAS_11222333000181_2026-08.pdf` | `11222333000181` | `DAS` | `2026-08` |
+  | `darf-529.982.247-25-082026.pdf` | `52998224725` | `DARF` | `2026-08` |
+  | `11222333000181 - FGTS - 08_2026.pdf` | `11222333000181` | `FGTS` | `2026-08` |
+  | `guia sem nada.pdf` | `null` | `null` | `null` |
+  | `boleto protocolo 99999999999999 08-2026.pdf` | `null` | `BOLETO` | `2026-08` |
+
+- **`src/lib/scheduling/rule.test.ts`** — os dois ramos do `FIXED_DAY` (dia
+  do mês ainda não passou do vencimento, fica no mesmo mês; já passou, cai no
+  mês anterior) e o `BUSINESS_DAYS_BEFORE_DUE` (3 dias úteis antes de
+  7/set/2026 é 2/set, reaproveitando o caso já verificado à mão na etapa 3).
+- **`src/lib/scheduling/holidays.test.ts`** — Sexta-feira Santa de 2026 é
+  3/abr (e os dias ao redor não são), 7/set/2026 é feriado nacional e não é
+  dia útil, 3 dias úteis antes de 7/set/2026 é 2/set, e fim de semana comum
+  (sem ser feriado) também não é dia útil.
+- **`src/lib/audit/index.test.ts`** — `scrub` é privada (só `audit()` é
+  exportada), então o teste passa um `PrismaClient` falso — um objeto que só
+  captura o `data` de `auditLog.create`, sem tocar em Postgres — e chama a
+  função pública de verdade. Cobre: segredo aninhado em qualquer
+  profundidade, `passwordHash`/`accessTokenEnc` redigidos no primeiro nível,
+  array preservado como array, `Date` para ISO, `bigint` para string, e
+  `before`/`after` ausentes não viram chave `null` no registro.
+
+**Armadilha encontrada escrevendo o teste do audit:** o primeiro rascunho
+desestruturava `const { db, captured } = fakeDb()` — mas `captured` era um
+getter, e desestruturar **lê o valor na hora**, antes do `await audit(...)`
+rodar. Os seis testes falhavam com "Cannot read properties of undefined".
+Corrigido guardando o estado num objeto (`fake.state.captured`) e só lendo
+depois do `await`.
+
+Não há teste de webhook nem de dispatcher: dependem de Postgres e Redis
+(teste de integração, decisão de arquitetura separada — combinado não
+escrever sem perguntar antes, e não foi perguntado nesta sessão).
 
 ---
 

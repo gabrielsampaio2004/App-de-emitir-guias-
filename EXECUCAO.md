@@ -151,6 +151,10 @@ continua sem `actorId`; nenhuma tela usa mais `findFirst()` de tenant;
 
 ## Etapa C — testes automatizados
 
+**✅ Fechada em 10/09/2026 — ver seção 3 do `HANDOFF.md` para as quatro
+suítes, os 20 testes e a armadilha do getter desestruturado.** O resto desta
+seção fica como registro do raciocínio original; não reabra sem motivo.
+
 Use `node:test` (nativo, sem dependência nova) e adicione um script `test` ao
 `package.json`. Note que `"type": "module"` — os testes são ESM.
 
