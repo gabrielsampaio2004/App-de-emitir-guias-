@@ -34,6 +34,36 @@ async function cancelDelivery(deliveryId: string, tenantId: string, motivo: stri
   });
 }
 
+/**
+ * Uma Delivery só está em SENDING quando este mesmo processador já a marcou
+ * assim numa execução anterior deste job (é o único lugar que grava esse
+ * status). Se o job roda de novo e ainda encontra SENDING, o processo
+ * anterior morreu depois de a Meta aceitar a mensagem e antes de gravar
+ * SENT/QUEUED/FAILED — não dá pra saber se o envio saiu. Reenviar seria
+ * violar "nunca envie duas vezes"; ficar em SENDING para sempre esconderia o
+ * problema. Por isso vira SEND_UNCERTAIN: visível na tela, e nunca
+ * reenfileirado a partir daqui (só um humano decide).
+ */
+async function markSendUncertain(deliveryId: string, tenantId: string) {
+  const motivo =
+    "Processo interrompido durante o envio — confirme manualmente se a mensagem chegou ao cliente.";
+  await db.$transaction(async (tx) => {
+    await tx.delivery.update({
+      where: { id: deliveryId },
+      data: { status: "SEND_UNCERTAIN", lastError: motivo },
+    });
+    await tx.deliveryEvent.create({
+      data: { deliveryId, type: "send_uncertain", payload: { motivo } },
+    });
+    await audit(tx, { tenantId, actorLabel: "system:dispatcher" }, {
+      action: "delivery.send_uncertain",
+      entityType: "Delivery",
+      entityId: deliveryId,
+      after: { motivo },
+    });
+  });
+}
+
 export const dispatcher = new Worker(
   "deliveries",
   async (job) => {
@@ -46,8 +76,19 @@ export const dispatcher = new Worker(
       },
     });
 
-    if (["SENT", "DELIVERED", "READ", "CANCELLED"].includes(delivery.status)) {
-      return; // já resolvido, nada a fazer
+    // Terminal para este worker: SENT/DELIVERED/READ/CANCELLED já resolveram
+    // de verdade; SEND_UNCERTAIN não resolveu nada, mas só um humano decide
+    // daqui em diante — o worker nunca reenvia nem reprocessa sozinho.
+    if (["SENT", "DELIVERED", "READ", "CANCELLED", "SEND_UNCERTAIN"].includes(delivery.status)) {
+      return;
+    }
+
+    // SENDING aqui só acontece se este job já rodou antes e morreu depois
+    // do update abaixo (só este processador grava SENDING). Nunca reenvie:
+    // torna visível para revisão humana em vez de tentar de novo.
+    if (delivery.status === "SENDING") {
+      await markSendUncertain(delivery.id, delivery.tenantId);
+      return;
     }
 
     // Cliente desativado depois do agendamento? Não envia.
@@ -88,7 +129,6 @@ export const dispatcher = new Worker(
         file,
         filename: delivery.document.filename,
         mimeType: delivery.document.mimeType,
-        idempotencyKey: delivery.idempotencyKey,
         vars: {
           nome: delivery.client.name.split(" ")[0] ?? delivery.client.name,
           tipo: delivery.document.kind ?? "documento",

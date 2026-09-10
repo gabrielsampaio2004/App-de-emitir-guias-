@@ -11,10 +11,10 @@ apagado.
 Estado: `npm run typecheck` e `npm run build` passam limpos (todas as rotas
 dinâmicas), `npm run dev` sobe. Etapas 1, 2 e 3 implementadas e verificadas
 contra Postgres, Redis e **R2 reais**. Para o aceite ponta a ponta falta só o
-lado da Meta (seção 5) — mas **há um bug aberto e sério** no caminho do envio,
-na seção 2.
+lado da Meta (seção 5). Sem bug sério aberto no caminho do envio — a Etapa A
+do `EXECUCAO.md` (envio duplicado) fechou nesta sessão, ver seção 4.
 
-Última atualização: 10/09/2026, seção 4 resolvida.
+Última atualização: 10/09/2026, Etapa A do `EXECUCAO.md` fechada.
 
 ---
 
@@ -101,23 +101,34 @@ problemas de forma errada.
 
 ## 2. Bugs abertos
 
-**Um, e é sério: envio duplicado quando o processo morre no meio do envio.**
-O dispatcher pula `["SENT","DELIVERED","READ","CANCELLED"]`
-(`src/workers/dispatcher.ts:49`) — `SENDING` **não** está na lista. Se o
-processo cair depois de a Meta aceitar a mensagem e antes de gravar `SENT`, o
-BullMQ reexecuta o job travado, o dispatcher vê `SENDING` e envia de novo. E
-não há rede de proteção do outro lado: o `idempotencyKey` é declarado em
-`src/lib/whatsapp/provider.ts:22` prometendo evitar duplicidade, mas o
-`meta-cloud.ts` nunca o lê (confira com
-`grep -n idempotencyKey src/lib/whatsapp/*.ts`).
+**Um, encontrado nesta sessão ao montar o ambiente para reproduzir a Etapa A
+— fora do escopo dela, não corrigido.** `prisma/seed.ts` grava o
+`accessToken` cifrado com `accessToken ?? "PLACEHOLDER_ACCESS_TOKEN"`
+(perto do fim do arquivo). `??` só cai no fallback para `null`/`undefined` —
+não para string vazia. E o próprio `.env.example` que a seção 0 manda copiar
+tem `WHATSAPP_ACCESS_TOKEN=""`: uma string vazia, não uma variável ausente.
+Resultado: `npm run db:seed` sem preencher as credenciais da Meta cifra uma
+string vazia em vez do placeholder, e a `WhatsAppAccount` fica com um
+`accessTokenEnc` que o `decrypt()` rejeita com "Formato de texto cifrado
+inválido" — quebrando *qualquer* delivery desse tenant assim que o dispatcher
+tenta descriptografar o token, antes até de chegar na Meta ou no R2.
 
-⚠️ **Confirmado por leitura do código, ainda NÃO reproduzido.** Este documento
-já descreveu problema errado antes — reproduza antes de corrigir. O plano está
-na etapa A do `EXECUCAO.md`.
+**Confirmado por execução.** Segui a seção 0 à risca (`cp .env.example
+.env`, preenchi só banco/Redis/`ENCRYPTION_KEY`, sem as três variáveis da
+Meta) e rodei `npm run db:seed`; a `WhatsAppAccount` ficou com
+`accessTokenEnc` terminando em `:` (ciphertext vazio — confirmado com
+`SELECT length("accessTokenEnc")` e comparando com o tamanho esperado para
+"PLACEHOLDER_ACCESS_TOKEN"). Contornei manualmente (regravando a coluna) só
+para poder reproduzir a Etapa A; não mexi no `seed.ts`.
+
+**Não corrigido de propósito — decisão travada da sessão foi só a Etapa A.**
+Fica para quem pegar a próxima etapa: trocar `??` por uma checagem de
+truthiness (`accessToken || "PLACEHOLDER_ACCESS_TOKEN"`, ou `accessToken
+?.trim() || ...`) resolve.
 
 Fora esse, todos os bugs confirmados por execução foram corrigidos (dois na
-etapa 2, um na etapa 3, e os dois da seção 4). O resto não é conserto, é
-construção: ver seções 3 e 5.
+etapa 2, um na etapa 3, os dois da seção 4, e o da Etapa A). O resto não é
+conserto, é construção: ver seções 3 e 5.
 
 ---
 
@@ -146,10 +157,11 @@ rejeitados.
 
 ---
 
-## 4. Problemas por inspeção — os dois confirmados e corrigidos ✅
+## 4. Problemas confirmados por execução e corrigidos ✅
 
-Estavam marcados como "não executados" desde o começo. Em 10/09/2026 os dois
-foram **reproduzidos de verdade** contra Postgres e Redis reais, e corrigidos.
+Estavam marcados como "não executados" ou "não reproduzidos". Em 10/09/2026
+os três foram **reproduzidos de verdade** contra Postgres e Redis reais, e
+corrigidos.
 
 1. **Delivery órfã em `enqueueDue`** — **confirmado.** Reprodução: com o Redis
    derrubado, o `UPDATE` para `QUEUED` passa e o `sendQueue.add()` fica
@@ -187,6 +199,61 @@ foram **reproduzidos de verdade** contra Postgres e Redis reais, e corrigidos.
    enviar, nunca enviar para quem revogou. Verificado: a constraint rejeita
    `GRANTED` + `revokedAt`, e uma revogação de verdade (`REVOKED` + carimbo)
    continua permitida.
+
+3. **Envio duplicado quando o processo morre no meio do envio (Etapa A do
+   `EXECUCAO.md`) — confirmado.** O dispatcher pulava
+   `["SENT","DELIVERED","READ","CANCELLED"]`; `SENDING` não estava na lista.
+   Reprodução: criei uma `Delivery` já em `SENDING` (simulando processo morto
+   depois de a Meta aceitar a mensagem e antes de gravar `SENT`) e enfileirei
+   um job pra ela — o mesmo efeito, do ponto de vista do processador, de o
+   BullMQ reexecutar um job travado. No código antes da correção, o guard não
+   barrou: `attempts` incrementou de novo e o dispatcher seguiu até a chamada
+   de envio (parou no limite esperado sem credencial real — `getObject`
+   falhou com "R2_ACCOUNT_ID não definida" — mas o ponto é que chegou lá de
+   novo). Sem credencial de R2/Meta neste ambiente, não dava pra provar o
+   caminho completo até a Cloud API; a reprodução prova exatamente a parte
+   que importa, o guard não segurando.
+
+   Confirmado também: `idempotencyKey` é declarado em
+   `src/lib/whatsapp/provider.ts` como "evita duplicidade", o dispatcher
+   passava, e o `meta-cloud.ts` nunca lê (`grep -n idempotencyKey
+   src/lib/whatsapp/*.ts` não retorna nenhum uso dentro de `meta-cloud.ts`).
+
+   **Decisão 1 — como tratar `SENDING`:** entra na lista de status que o
+   worker nunca reprocessa, mas ao invés de só devolver silenciosamente
+   (o que deixaria a linha presa pra sempre, invisível), vira um novo status
+   `SEND_UNCERTAIN` (migration `20260910180000_delivery_send_uncertain`,
+   `ALTER TYPE ... ADD VALUE`, escrita à mão como as outras que mexem em
+   `CHECK`/enum). Não reusei `FAILED`: `FAILED` afirma "não saiu", que pode
+   ser mentira aqui — não sabemos se a Meta recebeu ou não. Só um humano,
+   checando o WhatsApp real do cliente, resolve daqui pra frente; o worker
+   nunca reenfileira uma `SEND_UNCERTAIN` sozinho.
+   `src/workers/dispatcher.ts` grava `Delivery.lastError`,
+   `DeliveryEvent(type: "send_uncertain")` e `AuditLog` na mesma transação.
+   Verificado: subi `npm run dev`, deixei a `Delivery` de teste em
+   `SEND_UNCERTAIN` no banco e conferi com `curl http://localhost:3000/log`
+   que a linha aparece nas duas tabelas da tela — nenhuma tela nova precisou
+   ser criada, `/log` já lê `DeliveryEvent`/`AuditLog` de forma genérica.
+
+   **Decisão 2 — `idempotencyKey` no contrato do provider:** removido de
+   `SendDocumentParams`, não tirado de uso — a API de mensagens da Meta não
+   aceita um token de deduplicação do cliente nesse endpoint, então prometer
+   isso ali era uma garantia que nenhuma implementação real cumpre. A
+   proteção de verdade contra reenvio continua onde sempre esteve e sem
+   mudança nenhuma: `Delivery.idempotencyKey` como `jobId` do BullMQ e o
+   `UPDATE ... WHERE status = 'SCHEDULED'`, os dois em `src/lib/dispatch.ts`.
+   Comentário do arquivo atualizado para apontar pra lá.
+
+   Reexecutei a mesma reprodução depois da correção: `attempts` não mudou, a
+   `Delivery` foi para `SEND_UNCERTAIN` com `lastError` explicando o motivo,
+   `DeliveryEvent` e `AuditLog` gravados, job terminou `completed` (não
+   `failed` — não entra na fila de retentativa do BullMQ).
+
+   Rodei `npm run typecheck` e `npm run build` — limpos. Confirmei as
+   migrations num banco novo (`CREATE DATABASE guiazap_teste` + `prisma
+   migrate deploy` + `DROP DATABASE`): as cinco aplicam, e
+   `SELECT unnest(enum_range(NULL::"DeliveryStatus"))` mostra `SEND_UNCERTAIN`
+   na lista.
 
 ---
 

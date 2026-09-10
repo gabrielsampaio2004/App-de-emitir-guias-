@@ -59,6 +59,10 @@ implementação.
 
 ## Etapa A — envio duplicado quando o processo morre no meio ✅ prioridade
 
+**✅ Fechada em 10/09/2026 — ver seção 4 do `HANDOFF.md` para reprodução,
+decisão e verificação.** O resto desta seção fica como registro do raciocínio
+original; não reabra sem motivo.
+
 **O problema, já confirmado por leitura do código.** O dispatcher pula
 `["SENT","DELIVERED","READ","CANCELLED"]` (`src/workers/dispatcher.ts`, linha
 49). `SENDING` **não** está na lista. Se o processo morrer depois de a Meta

@@ -1,6 +1,13 @@
 /**
  * Contrato único de envio. Toda a aplicação fala com esta interface,
  * nunca direto com a Meta. Trocar de provedor = escrever outra classe.
+ *
+ * Não há campo de idempotência aqui: a API de mensagens da Meta não aceita
+ * um token de deduplicação do lado do cliente, então prometer isso neste
+ * contrato seria uma garantia que nenhuma implementação consegue cumprir.
+ * A proteção real contra reenvio (a que o CLAUDE.md exige) mora uma camada
+ * abaixo do provider — `jobId` do BullMQ e `Delivery.idempotencyKey` como
+ * chave única no banco, em `src/lib/dispatch.ts` — e continua valendo.
  */
 
 export interface SendDocumentParams {
@@ -18,8 +25,6 @@ export interface SendDocumentParams {
     competencia: string; // "08/2026"
     vencimento: string;  // "20/09/2026"
   };
-  /** Evita duplicidade se a chamada for repetida */
-  idempotencyKey: string;
 }
 
 export interface SendResult {

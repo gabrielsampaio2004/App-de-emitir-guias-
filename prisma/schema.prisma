@@ -186,6 +186,12 @@ enum DeliveryStatus {
   READ
   FAILED
   CANCELLED
+  // Processo morreu entre a Meta aceitar a mensagem e o SENT ser gravado —
+  // não dá para saber se o envio saiu ou não. Nunca reenvie a partir daqui;
+  // só um humano, checando o WhatsApp real do cliente, resolve. Existe como
+  // valor próprio (em vez de reusar FAILED) porque FAILED diz "não saiu",
+  // que pode ser mentira aqui.
+  SEND_UNCERTAIN
 }
 
 // Linha do tempo técnica de cada envio (inclui webhooks da Meta)
