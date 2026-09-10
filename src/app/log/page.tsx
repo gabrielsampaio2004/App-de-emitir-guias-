@@ -1,26 +1,23 @@
 import { db } from "@/lib/db";
+import { requireSession } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export default async function LogPage() {
-  const tenant = await db.tenant.findFirst();
+  const session = await requireSession();
 
-  const deliveryEvents = tenant
-    ? await db.deliveryEvent.findMany({
-        where: { delivery: { tenantId: tenant.id } },
-        orderBy: { occurredAt: "desc" },
-        take: 100,
-        include: { delivery: { include: { client: true, document: true } } },
-      })
-    : [];
+  const deliveryEvents = await db.deliveryEvent.findMany({
+    where: { delivery: { tenantId: session.user.tenantId } },
+    orderBy: { occurredAt: "desc" },
+    take: 100,
+    include: { delivery: { include: { client: true, document: true } } },
+  });
 
-  const auditLogs = tenant
-    ? await db.auditLog.findMany({
-        where: { tenantId: tenant.id },
-        orderBy: { createdAt: "desc" },
-        take: 100,
-      })
-    : [];
+  const auditLogs = await db.auditLog.findMany({
+    where: { tenantId: session.user.tenantId },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
 
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 1000, margin: "2rem auto" }}>

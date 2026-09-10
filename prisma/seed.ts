@@ -2,6 +2,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { encrypt } from "../src/lib/crypto";
+import { createUserWithPassword } from "../src/lib/auth/create-user";
 
 /**
  * Seed da Etapa 2: só o necessário para provar o envio de ponta a ponta.
@@ -91,6 +92,39 @@ async function main() {
     update: hasRealCredentials ? waAccount : {},
     create: { tenantId: tenant.id, ...waAccount },
   });
+
+  // Bootstrap do primeiro OWNER (Etapa B). O cadastro público fica
+  // desligado de propósito (emailAndPassword.disableSignUp) — sem isto,
+  // não haveria como entrar no sistema pela primeira vez. Só roda com as
+  // três variáveis presentes, e só cria se o e-mail ainda não existir: não
+  // é upsert, porque trocar a senha de alguém sem avisar é o tipo de coisa
+  // que devia exigir uma ação explícita, não um efeito colateral de rodar
+  // o seed de novo.
+  const ownerEmail = process.env.SEED_OWNER_EMAIL;
+  const ownerPassword = process.env.SEED_OWNER_PASSWORD;
+  const ownerName = process.env.SEED_OWNER_NAME;
+
+  if (ownerEmail && ownerPassword && ownerName) {
+    try {
+      const owner = await createUserWithPassword({
+        tenantId: tenant.id,
+        email: ownerEmail,
+        name: ownerName,
+        password: ownerPassword,
+        role: "OWNER",
+      });
+      console.log(`[seed] owner criado: ${owner.email} (id=${owner.id})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`[seed] owner não criado: ${message}`);
+    }
+  } else {
+    console.warn(
+      "[seed] SEED_OWNER_EMAIL / SEED_OWNER_PASSWORD / SEED_OWNER_NAME não " +
+        "definidos — nenhum usuário criado. Sem pelo menos um OWNER não dá " +
+        "pra entrar no sistema (cadastro público está desligado de propósito).",
+    );
+  }
 
   console.log(`[seed] tenant=${tenant.id} client=${client.id}`);
 }

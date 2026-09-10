@@ -8,6 +8,7 @@ import { putObject } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 import { parseFilename } from "@/lib/matching/filename";
 import { matchClient } from "@/lib/matching/client";
+import { requireSession } from "@/lib/auth/session";
 
 /**
  * Upload de pasta inteira. Cada arquivo vira um Document (matching
@@ -19,10 +20,11 @@ import { matchClient } from "@/lib/matching/client";
  * Um arquivo com problema (duplicado, não-PDF, falha de storage) não
  * derruba o lote inteiro — cada arquivo é isolado num try/catch.
  */
-const ACTOR_LABEL = "system:web"; // sem auth ainda
-
 export async function uploadBatch(formData: FormData) {
-  const tenant = await db.tenant.findFirstOrThrow();
+  const session = await requireSession();
+  // findFirstOrThrow() pegava QUALQUER tenant — upload de um escritório
+  // podia ir parar no tenant errado. tenantId vem da sessão agora.
+  const tenant = await db.tenant.findUniqueOrThrow({ where: { id: session.user.tenantId } });
   const files = formData
     .getAll("files")
     .filter((f): f is File => f instanceof File && f.size > 0);
@@ -61,13 +63,13 @@ export async function uploadBatch(formData: FormData) {
             storageKey,
             kind: parsed.kind,
             competencia: parsed.competencia,
-            uploadedBy: ACTOR_LABEL,
+            uploadedBy: session.user.email,
           },
         });
 
         await audit(
           tx,
-          { tenantId: tenant.id, actorLabel: ACTOR_LABEL },
+          { tenantId: tenant.id, actorId: session.user.id, actorLabel: session.user.email },
           {
             action: "document.uploaded",
             entityType: "Document",

@@ -25,12 +25,12 @@ model Tenant {
   scheduleRuleFixedDay           Int? // dia do mês (1-31); usado com FIXED_DAY
   scheduleRuleBusinessDaysBefore Int? // dias úteis antes do vencimento; usado com BUSINESS_DAYS_BEFORE_DUE
 
-  users       User[]
-  clients     Client[]
-  documents   Document[]
-  deliveries  Delivery[]
-  auditLogs   AuditLog[]
-  waAccount   WhatsAppAccount?
+  users      User[]
+  clients    Client[]
+  documents  Document[]
+  deliveries Delivery[]
+  auditLogs  AuditLog[]
+  waAccount  WhatsAppAccount?
 }
 
 enum ScheduleRuleType {
@@ -38,16 +38,27 @@ enum ScheduleRuleType {
   BUSINESS_DAYS_BEFORE_DUE
 }
 
+// Campos até `role` são nossos; emailVerified/image/updatedAt existem porque
+// o better-auth (Etapa B) exige esses nomes exatos na tabela "user" (mesma
+// letra maiúscula/minúscula do Prisma Client, sem remap). O hash de senha
+// NÃO fica aqui — vive em Account.password (provider "credential"), que é
+// onde o better-auth guarda credencial de email+senha. `passwordHash` foi
+// removido: nunca teve leitor nem escritor no código (grep confirmou antes
+// desta etapa), então não havia quem "depender dele".
 model User {
-  id           String   @id @default(cuid())
-  tenantId     String
-  email        String   @unique
-  name         String
-  passwordHash String
-  role         UserRole @default(OPERATOR)
-  createdAt    DateTime @default(now())
+  id            String   @id @default(cuid())
+  tenantId      String
+  email         String   @unique
+  name          String
+  role          UserRole @default(OPERATOR)
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  accounts Account[]
+  sessions Session[]
 
   @@index([tenantId])
 }
@@ -58,17 +69,71 @@ enum UserRole {
   VIEWER
 }
 
+// ---------------------------------------------------------------
+// Autenticação (better-auth) — Account/Session/Verification espelham o
+// schema core que o better-auth 1.7.2 exige, campo por campo, para não
+// precisar de nenhum remap de modelName/fieldName na config.
+// ---------------------------------------------------------------
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  issuer                String // "local:credential" para email+senha
+  accountId             String // = userId no provider "credential"
+  providerId            String // "credential", ou id do provedor OAuth
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String? // hash da senha, só no provider "credential"
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([issuer, accountId])
+  @@index([userId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
 // Credenciais da Cloud API por escritório.
 // accessToken DEVE ser criptografado na aplicação (AES-256-GCM), nunca em texto puro.
 model WhatsAppAccount {
-  id              String   @id @default(cuid())
-  tenantId        String   @unique
-  wabaId          String
-  phoneNumberId   String
-  displayPhone    String
-  accessTokenEnc  String
-  verifiedAt      DateTime?
-  createdAt       DateTime @default(now())
+  id             String    @id @default(cuid())
+  tenantId       String    @unique
+  wabaId         String
+  phoneNumberId  String
+  displayPhone   String
+  accessTokenEnc String
+  verifiedAt     DateTime?
+  createdAt      DateTime  @default(now())
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 }
@@ -78,13 +143,13 @@ model WhatsAppAccount {
 // ---------------------------------------------------------------
 
 model Client {
-  id         String   @id @default(cuid())
-  tenantId   String
-  name       String
-  document   String   // CPF ou CNPJ, só dígitos — usado no matching por nome de arquivo
-  phoneE164  String   // +5579999999999
-  active     Boolean  @default(true)
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  document  String // CPF ou CNPJ, só dígitos — usado no matching por nome de arquivo
+  phoneE164 String // +5579999999999
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
 
   tenant     Tenant     @relation(fields: [tenantId], references: [id])
   documents  Document[]
@@ -97,13 +162,13 @@ model Client {
 
 // Prova de que o cliente autorizou receber no WhatsApp. Exigência de LGPD.
 model Consent {
-  id         String        @id @default(cuid())
-  clientId   String
-  channel    String        @default("whatsapp")
-  status     ConsentStatus
-  evidence   Json?         // origem, IP, texto aceito, ou id da msg de opt-in
-  grantedAt  DateTime      @default(now())
-  revokedAt  DateTime?
+  id        String        @id @default(cuid())
+  clientId  String
+  channel   String        @default("whatsapp")
+  status    ConsentStatus
+  evidence  Json? // origem, IP, texto aceito, ou id da msg de opt-in
+  grantedAt DateTime      @default(now())
+  revokedAt DateTime?
 
   client Client @relation(fields: [clientId], references: [id])
 
@@ -120,19 +185,19 @@ enum ConsentStatus {
 // ---------------------------------------------------------------
 
 model Document {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   tenantId    String
-  clientId    String?  // null = não conseguiu vincular, precisa de revisão humana
+  clientId    String? // null = não conseguiu vincular, precisa de revisão humana
   filename    String
   mimeType    String
   sizeBytes   Int
-  sha256      String   // impede subir a mesma guia duas vezes
-  storageKey  String   // chave no R2/S3
-  kind        String?  // DAS, DARF, FGTS, BOLETO...
-  competencia String?  // "2026-08"
+  sha256      String // impede subir a mesma guia duas vezes
+  storageKey  String // chave no R2/S3
+  kind        String? // DAS, DARF, FGTS, BOLETO...
+  competencia String? // "2026-08"
   dueDate     DateTime?
   uploadedBy  String
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   tenant     Tenant     @relation(fields: [tenantId], references: [id])
   client     Client?    @relation(fields: [clientId], references: [id])
@@ -198,7 +263,7 @@ enum DeliveryStatus {
 model DeliveryEvent {
   id         String   @id @default(cuid())
   deliveryId String
-  type       String   // queued, sent, delivered, read, failed
+  type       String // queued, sent, delivered, read, failed
   payload    Json?
   occurredAt DateTime @default(now())
 
@@ -214,9 +279,9 @@ model DeliveryEvent {
 model AuditLog {
   id         String   @id @default(cuid())
   tenantId   String
-  actorId    String?  // null = ação do sistema (worker, webhook)
-  actorLabel String   // "maria@escritorio.com" ou "system:dispatcher"
-  action     String   // client.created, client.phone_changed, delivery.cancelled...
+  actorId    String? // null = ação do sistema (worker, webhook)
+  actorLabel String // "maria@escritorio.com" ou "system:dispatcher"
+  action     String // client.created, client.phone_changed, delivery.cancelled...
   entityType String
   entityId   String
   before     Json?

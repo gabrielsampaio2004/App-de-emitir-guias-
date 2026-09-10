@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { computeScheduledAt } from "@/lib/scheduling/rule";
+import { requireSession } from "@/lib/auth/session";
 
 /**
  * Confirma cliente + vencimento de um Document da fila de revisão e cria a
@@ -14,9 +15,9 @@ import { computeScheduledAt } from "@/lib/scheduling/rule";
  * BullMQ quando chegar a hora é o `enqueueDue` do worker — igual a
  * qualquer outra Delivery agendada.
  */
-const ACTOR_LABEL = "system:web"; // sem auth ainda
-
 export async function confirmDocument(formData: FormData) {
+  const session = await requireSession();
+
   const documentId = formData.get("documentId");
   const clientId = formData.get("clientId");
   const dueDateRaw = formData.get("dueDate");
@@ -36,9 +37,15 @@ export async function confirmDocument(formData: FormData) {
     throw new Error("Vencimento inválido.");
   }
 
-  const document = await db.document.findUniqueOrThrow({ where: { id: documentId } });
+  // Documento e cliente filtrados pelo tenantId da sessão, não do próprio
+  // documentId: antes, um documentId de outro escritório (POST direto,
+  // fora da tela) era aceito de ponta a ponta — o `tenant` usado pra
+  // calcular scheduledAt vinha do document, nunca de quem estava logado.
+  const document = await db.document.findFirstOrThrow({
+    where: { id: documentId, tenantId: session.user.tenantId },
+  });
   const client = await db.client.findFirstOrThrow({
-    where: { id: clientId, tenantId: document.tenantId },
+    where: { id: clientId, tenantId: session.user.tenantId },
   });
   if (!client.active) {
     // O <select> só lista cliente ativo, mas isso é um POST comum — sem
@@ -46,7 +53,7 @@ export async function confirmDocument(formData: FormData) {
     // desativado e o dispatcher cancelaria em silêncio na hora do envio.
     throw new Error("Este cliente está desativado — reative em /clientes antes de agendar.");
   }
-  const tenant = await db.tenant.findUniqueOrThrow({ where: { id: document.tenantId } });
+  const tenant = await db.tenant.findUniqueOrThrow({ where: { id: session.user.tenantId } });
 
   const scheduledAt = computeScheduledAt(tenant, dueDate);
   const idempotencyKey = randomUUID();
@@ -62,7 +69,7 @@ export async function confirmDocument(formData: FormData) {
 
       await audit(
         tx,
-        { tenantId: document.tenantId, actorLabel: ACTOR_LABEL },
+        { tenantId: document.tenantId, actorId: session.user.id, actorLabel: session.user.email },
         {
           action: "document.reviewed",
           entityType: "Document",
@@ -89,7 +96,7 @@ export async function confirmDocument(formData: FormData) {
 
       await audit(
         tx,
-        { tenantId: document.tenantId, actorLabel: ACTOR_LABEL },
+        { tenantId: document.tenantId, actorId: session.user.id, actorLabel: session.user.email },
         {
           action: "delivery.scheduled",
           entityType: "Delivery",

@@ -1,32 +1,29 @@
 import { db } from "@/lib/db";
+import { requireSession } from "@/lib/auth/session";
 import { setClientActive } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function ClientesPage() {
-  const tenant = await db.tenant.findFirst();
+  const session = await requireSession();
 
-  const clients = tenant
-    ? await db.client.findMany({
-        where: { tenantId: tenant.id },
-        orderBy: [{ active: "desc" }, { name: "asc" }],
-        include: {
-          _count: {
-            select: {
-              deliveries: { where: { status: { in: ["SCHEDULED", "QUEUED"] } } },
-            },
-          },
+  const clients = await db.client.findMany({
+    where: { tenantId: session.user.tenantId },
+    orderBy: [{ active: "desc" }, { name: "asc" }],
+    include: {
+      _count: {
+        select: {
+          deliveries: { where: { status: { in: ["SCHEDULED", "QUEUED"] } } },
         },
-      })
-    : [];
+      },
+    },
+  });
 
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 900, margin: "2rem auto" }}>
       <h1>Clientes</h1>
 
-      {!tenant ? (
-        <p>Nenhum tenant cadastrado.</p>
-      ) : clients.length === 0 ? (
+      {clients.length === 0 ? (
         <p>Nenhum cliente cadastrado.</p>
       ) : (
         <>

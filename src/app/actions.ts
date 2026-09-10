@@ -7,6 +7,7 @@ import { putObject } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 import { claimAndEnqueue } from "@/lib/dispatch";
 import { parseFilename } from "@/lib/matching/filename";
+import { requireSession } from "@/lib/auth/session";
 
 /**
  * Etapa 2: botão "enviar agora", sem agendamento. Sobe o PDF, cria o
@@ -14,9 +15,9 @@ import { parseFilename } from "@/lib/matching/filename";
  * audit log, e manda direto pra fila — o worker (`npm run worker`) que
  * efetivamente chama a Cloud API.
  */
-const ACTOR_LABEL = "system:web"; // sem auth ainda nesta etapa
-
 export async function sendNow(formData: FormData) {
+  const session = await requireSession();
+
   const clientId = formData.get("clientId");
   const file = formData.get("file");
 
@@ -30,7 +31,12 @@ export async function sendNow(formData: FormData) {
     throw new Error("Só é aceito PDF.");
   }
 
-  const client = await db.client.findUniqueOrThrow({ where: { id: clientId } });
+  // Filtra por tenantId da sessão, não só pelo id: um clientId de outro
+  // tenant (mandado direto no POST, não pelo <select>) tem que dar "não
+  // encontrado", nunca operar em cima do cliente de outro escritório.
+  const client = await db.client.findFirstOrThrow({
+    where: { id: clientId, tenantId: session.user.tenantId },
+  });
   if (!client.active) {
     // O <select> da tela só lista cliente ativo, mas o formulário chega
     // como POST comum — sem essa checagem, um cliente desativado entre o
@@ -61,13 +67,13 @@ export async function sendNow(formData: FormData) {
         storageKey,
         kind: parsed.kind,
         competencia: parsed.competencia,
-        uploadedBy: ACTOR_LABEL,
+        uploadedBy: session.user.email,
       },
     });
 
     await audit(
       tx,
-      { tenantId: client.tenantId, actorLabel: ACTOR_LABEL },
+      { tenantId: client.tenantId, actorId: session.user.id, actorLabel: session.user.email },
       {
         action: "document.uploaded",
         entityType: "Document",
@@ -88,7 +94,7 @@ export async function sendNow(formData: FormData) {
 
     await audit(
       tx,
-      { tenantId: client.tenantId, actorLabel: ACTOR_LABEL },
+      { tenantId: client.tenantId, actorId: session.user.id, actorLabel: session.user.email },
       {
         action: "delivery.created",
         entityType: "Delivery",

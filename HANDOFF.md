@@ -14,11 +14,12 @@ implementadas e verificadas contra Postgres, Redis e **R2 reais**. Para o
 aceite ponta a ponta falta só o lado da Meta (seção 5). Sem bug sério aberto
 no caminho do envio — Etapas A, C e D do `EXECUCAO.md` fechadas em sessões
 anteriores: A (envio duplicado) na seção 4, C (testes automatizados) na
-seção 3, D (nome do template configurável) na seção 5 (Etapa 2).
+seção 3, D (nome do template configurável) na seção 5 (Etapa 2). **Etapa B
+(autenticação) fechou nesta sessão** — login real, multi-tenant por sessão
+em vez de `findFirst()`, `AuditLog` com autor de verdade — ver seção 5
+(Etapa B).
 
-Última atualização: 10/09/2026 — reverificado nesta sessão (`npm run
-typecheck`, `npm test`, `npm run build` limpos); nenhum código mudou desde a
-Etapa D, só esta checagem.
+Última atualização: 10/09/2026 — Etapa B do `EXECUCAO.md` fechada.
 
 ---
 
@@ -524,6 +525,164 @@ completa.
 já foi verificado contra bucket real). O upload em lote parava exatamente no
 `putObject`; com o R2 configurado, essa fronteira saiu do caminho e o próximo
 limite passa a ser a chamada à Cloud API.
+
+### Etapa B do `EXECUCAO.md` — autenticação ✅
+
+Fechada em 10/09/2026. Antes de mexer no schema, as duas decisões de
+arquitetura foram propostas e confirmadas com o dono do projeto (mesmo
+espírito das três decisões da Etapa 3).
+
+**Decisão 1 — o conflito `User` × better-auth: adapta, não duplica.**
+O better-auth 1.7.2 exige uma tabela `user` com `name`/`email`/
+`emailVerified`/`image`/`createdAt`/`updatedAt`, e guarda a credencial de
+email+senha numa tabela `account` **separada** (`Account.password`, provider
+`"credential"`) — não no próprio `user`. Isso mudou a forma de resolver o
+conflito: não era "onde encaixar o `passwordHash`", porque o better-auth
+nem usa esse campo.
+
+- `model User` continua sendo o mesmo model, só ganhou `emailVerified`,
+  `image`, `updatedAt` (nomes idênticos aos que o better-auth espera — sem
+  nenhum remap de `modelName`/`fields` na config, porque `model User` do
+  Prisma já vira `prisma.user`, que é exatamente a chave default do
+  better-auth). `tenantId` e `role` (nosso `UserRole`, não o sistema de
+  papel do better-auth) continuam ali, registrados como `user.additionalFields`
+  só para aparecerem em `session.user` na leitura — a escrita deles nunca
+  passa pelo cadastro público.
+- **`passwordHash` foi removido.** Não reaproveitei: nunca teve leitor nem
+  escritor no código (`grep -rn passwordHash src/ prisma/` antes da etapa só
+  batia no schema, na migration e no `REDACTED` do audit — nenhuma
+  `action.ts`, nenhum `db.user.*` em lugar nenhum). Não tinha quem
+  "dependesse dele" pra quebrar.
+- `Account`, `Session`, `Verification` são tabelas novas, campo por campo
+  iguais ao schema core do better-auth (`node_modules/@better-auth/core/dist/db/get-tables.mjs`
+  foi a fonte, não documentação de terceiros).
+
+**Decisão 2 — cadastro público desligado, usuário criado por dentro.**
+Perguntei antes de escolher entre três caminhos (helper interno OWNER-only,
+o plugin `admin` do better-auth, ou deixar o cadastro público aberto por
+enquanto) — o dono escolheu o helper interno. Motivo: GuiaZap é um SaaS
+onde o escritório convida quem usa, não auto-cadastro; e o plugin `admin`
+traria um sistema de papel/permissão próprio, paralelo ao `UserRole` que já
+existe, sem necessidade nenhuma pro que a etapa pede.
+
+- `emailAndPassword: { enabled: true, disableSignUp: true }` em
+  `src/lib/auth/index.ts` — **bloqueia o endpoint** `/api/auth/sign-up/email`
+  de verdade (não é só a tela que não foi construída; o handler do
+  better-auth recusa antes de qualquer escrita, `EMAIL_PASSWORD_SIGN_UP_DISABLED`).
+- `src/lib/auth/create-user.ts` cria `User`+`Account` credential
+  reaproveitando `ctx.password.hash()` e `ctx.internalAdapter.createUser`/
+  `linkAccount` do próprio `auth.$context` — o mesmo hash e a mesma escrita
+  que o `sign-up/email` do better-auth usa por baixo, só pulando o gate
+  HTTP. Dois chamadores: `prisma/seed.ts` (bootstrap do primeiro OWNER, via
+  `SEED_OWNER_EMAIL`/`SEED_OWNER_PASSWORD`/`SEED_OWNER_NAME` — documentadas
+  no `.env.example`; não é upsert, um e-mail já existente não tem a senha
+  trocada em silêncio) e a Server Action `createUser` em `/usuarios`
+  (OWNER-only, checado por `requireOwner()` — não só pelo `<select>` da
+  tela).
+
+**O que foi construído**, além das duas decisões:
+- Migration à mão `20260910190000_better_auth` (`ALTER TABLE "User"` +
+  `CREATE TABLE` das três novas), seguindo o padrão já estabelecido pro
+  `prisma migrate dev` interativo — aplicada e conferida num banco novo.
+- `src/lib/auth/index.ts` — config do better-auth (`prismaAdapter`,
+  `nextCookies()` por último, como a integração de Next exige).
+- `src/app/api/auth/[...all]/route.ts` — `toNextJsHandler(auth)`.
+- `src/lib/auth/client.ts` — `createAuthClient()` pro form de login.
+- `src/lib/auth/session.ts` — `requireSession()` (sessão de verdade via
+  `auth.api.getSession`, não só cookie) e `requireOwner()`.
+- `src/proxy.ts` — redirect rápido pra `/login` quando não há cookie de
+  sessão. **É só UX**: a prova de verdade é `requireSession()` dentro de
+  cada Server Component/Action protegida — o próprio guia do Next avisa que
+  Proxy não cobre toda Server Function, então a autorização real não pode
+  morar só ali.
+- `src/app/login/page.tsx`, `src/app/logout-button.tsx`,
+  `src/app/usuarios/` (lista + criação, OWNER-only) — telas novas.
+  `src/app/layout.tsx` ganhou nav condicional (só aparece com sessão; link
+  "Usuários" só pra OWNER).
+- `actorId`/`actorLabel` reais (da sessão) substituindo `ACTOR_LABEL =
+  "system:web"` nas cinco `actions.ts` que tinham a constante
+  (`src/app/actions.ts`, `clientes/`, `configuracoes/`, `lote/`,
+  `revisao/`). Ações de sistema (`system:dispatcher` no worker,
+  `system:webhook` no webhook) não foram tocadas — continuam sem `actorId`,
+  como o `EXECUCAO.md` pede.
+- Os sete arquivos que faziam `tenant.findFirst()`/`findFirstOrThrow()`
+  (conferidos de novo com `grep -rln "tenant.findFirst" src/app` antes de
+  começar — a lista não tinha mudado) agora usam `session.user.tenantId`.
+
+**Achado além da lista literal dos sete arquivos — mesma categoria de bug,
+mais sério.** Lendo cada `actions.ts` pra trocar o `ACTOR_LABEL`, achei que
+três delas aceitavam um `id` vindo direto do formulário (`clientId` em
+`src/app/actions.ts` e `clientes/actions.ts`; `documentId` em
+`revisao/actions.ts`) e operavam em cima dele **sem checar se pertencia ao
+tenant de quem estava logado** — um `clientId`/`documentId` de outro
+escritório, mandado num POST direto (fora do `<select>`/`<form>` da tela),
+seria aceito de ponta a ponta. Em `revisao/actions.ts` isso era ainda pior:
+o `tenant` usado pra calcular `scheduledAt` vinha do `document.tenantId`, não
+de quem estava logado — ou seja, nem precisava adivinhar o tenant certo, o
+código descobria sozinho. Corrigido trocando todo `findUniqueOrThrow({where:{id}})`
+por `findFirstOrThrow({where:{id, tenantId: session.user.tenantId}})` nesses
+três pontos. Isto não estava na lista do `EXECUCAO.md`, mas é exatamente o
+que a frase "multi-tenant é segurança, não cosmética" pede — corrigir só os
+sete `findFirst()` e deixar essas três portas abertas teria sido cumprir a
+letra e furar o espírito.
+
+**Armadilha nova, não documentada em lugar nenhum do projeto:** o Next.js
+16 **renomeou `middleware.ts` para `proxy.ts`** (mesma função, export
+renomeado de `middleware` para `proxy` — `middleware.js` hoje só existe
+como redirecionamento). Descoberto lendo
+`node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/middleware.md`,
+como o `CLAUDE.md` manda antes de escrever código Next. Um `middleware.ts`
+não teria dado erro nenhum — só teria sido **ignorado em silêncio**, e a
+única proteção real teria ficado sendo o `requireSession()` de cada página
+(que já é a trava de verdade, mas o redirect rápido de UX não existiria).
+Registrada também nas "Armadilhas deste repositório" do `EXECUCAO.md`.
+
+**Verificado por execução, não só por tipo:**
+- `npm run db:seed` com `SEED_OWNER_*` no `.env`: criou `User` (role OWNER,
+  `tenantId` certo, `emailVerified=true`) e `Account` (provider
+  `credential`, hash de senha de verdade) — conferido direto no Postgres.
+  Rodei de novo: recusou recriar o mesmo e-mail (`"Já existe um usuário..."`,
+  sem sobrescrever).
+- Migrations num banco novo (`CREATE DATABASE guiazap_teste` + `prisma
+  migrate deploy` + `DROP DATABASE`): as seis aplicam,
+  `Account`/`Session`/`Verification` aparecem no `\dt`.
+- `npm run typecheck`, `npm test` (as 20 suítes da Etapa C sem regressão) e
+  `npm run build` (11 rotas, incluindo `/login`, `/usuarios`,
+  `/api/auth/[...all]`, e o proxy listado como `ƒ Proxy (Middleware)` no
+  resumo do build) — os três limpos.
+- **Fluxo completo via navegador de verdade** (Chromium headless via
+  Playwright, script scratch, apagado depois): login pelo `<form>` de
+  `/login` (não a API direto) → redireciona pra `/`, nav mostra o nome do
+  usuário e o link "Usuários" (role OWNER) → submeti o form de
+  `/configuracoes` (Server Action de verdade) → `/log` passou a mostrar
+  `dono@escritoriodemo.com.br` como ator, `"system:web"` sumiu → cliquei
+  "Sair" → voltou pra `/login` → `/configuracoes` depois do logout
+  redirecionou de novo pra `/login`. Conferido também direto no Postgres:
+  `AuditLog.actorId` da ação bate exatamente com o `id` do `User`, e a
+  linha mais antiga (`system:dispatcher`, da Etapa A) continua com
+  `actorId` nulo.
+- `curl` com cookie de sessão em `/`, `/clientes`, `/configuracoes`, `/log`,
+  `/lote`, `/revisao`, `/usuarios`: as sete, 200. Sem cookie: as mesmas
+  rotas voltam 307 pra `/login`.
+- `grep -rn "ACTOR_LABEL" src/app` e `grep -rln "tenant.findFirst" src/app`:
+  os dois, zero resultados.
+
+**Limitações conhecidas, deixadas de propósito:**
+- **Criar usuário em `/usuarios` não grava `AuditLog`.**
+  `createUserWithPassword` escreve pelo adapter interno do better-auth, fora
+  do `$transaction` que a regra do `CLAUDE.md` exige junto da ação. Gravar
+  o log sem essa garantia (ação e log em transações separadas, um crash no
+  meio deixando um sem o outro) seria pior do que não gravar — decidi não
+  fazer isso sem resolver a atomicidade primeiro, e isso ficou de fora do
+  escopo desta sessão.
+- O bug do `seed.ts` (`accessToken ?? "PLACEHOLDER..."` não pegando string
+  vazia — seção 2) continua aberto. Não é relacionado a auth; não mexi.
+- `SEED_OWNER_PASSWORD` usada nesta verificação é só de teste local — nunca
+  vai pro Git (mesma regra do `.env` de sempre), mas quem for para produção
+  precisa trocar a senha do primeiro OWNER, não reusar a de desenvolvimento.
+- Sem recuperação de senha, sem verificação de e-mail (não tem serviço de
+  e-mail no projeto), sem rate limit de tentativa de login. Nenhum dos três
+  estava no aceite da etapa; ficam como próximo passo se o dono quiser.
 
 ---
 

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { requireSession } from "@/lib/auth/session";
 
 /**
  * Liga/desliga um cliente. Desativar não apaga nada e não cancela na hora as
@@ -11,9 +12,9 @@ import { audit } from "@/lib/audit";
  * consentimento revogado). A tela mostra quantas guias agendadas serão
  * afetadas antes de você desativar.
  */
-const ACTOR_LABEL = "system:web"; // sem auth ainda
-
 export async function setClientActive(formData: FormData) {
+  const session = await requireSession();
+
   const clientId = formData.get("clientId");
   const activeRaw = formData.get("active");
 
@@ -25,7 +26,11 @@ export async function setClientActive(formData: FormData) {
   }
   const active = activeRaw === "true";
 
-  const client = await db.client.findUniqueOrThrow({ where: { id: clientId } });
+  // Tenant da sessão, não só o id do form: sem isso, um clientId de outro
+  // escritório (POST direto, fora do <form> da tela) seria aceito.
+  const client = await db.client.findFirstOrThrow({
+    where: { id: clientId, tenantId: session.user.tenantId },
+  });
 
   if (client.active !== active) {
     await db.$transaction(async (tx) => {
@@ -33,7 +38,7 @@ export async function setClientActive(formData: FormData) {
 
       await audit(
         tx,
-        { tenantId: client.tenantId, actorLabel: ACTOR_LABEL },
+        { tenantId: client.tenantId, actorId: session.user.id, actorLabel: session.user.email },
         {
           action: active ? "client.reactivated" : "client.deactivated",
           entityType: "Client",

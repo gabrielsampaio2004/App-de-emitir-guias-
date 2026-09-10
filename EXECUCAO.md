@@ -108,6 +108,11 @@ limpos; decisão documentada no `HANDOFF.md`.
 
 ## Etapa B — autenticação (o buraco maior)
 
+**✅ Fechada em 10/09/2026 — ver seção 5 (Etapa B) do `HANDOFF.md` para as
+duas decisões (conflito User×better-auth, cadastro desligado), o que foi
+construído e a verificação.** O resto desta seção fica como registro do
+raciocínio original; não reabra sem motivo.
+
 `BETTER_AUTH_SECRET` e `BETTER_AUTH_URL` estão no `.env.example` desde o começo
 e **não são usadas em lugar nenhum**. Toda ação grava
 `actorLabel: "system:web"` — veja o `const ACTOR_LABEL` no topo de cada
@@ -265,6 +270,12 @@ antes de encerrar.
 
 Todas custaram tempo de verdade. Não redescubra.
 
+- **`middleware.ts` foi renomeado para `proxy.ts` no Next 16** (mesma
+  função, export renomeado de `middleware` pra `proxy`). Um `middleware.ts`
+  não dá erro — é só **ignorado em silêncio**, o que pareceria "a proteção
+  de rota não funciona" sem nenhuma mensagem explicando por quê. Ver
+  `node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/middleware.md`.
+  Vai em `src/proxy.ts` (mesmo nível de `app/`, já que o projeto usa `src/`).
 - **Prisma:** o CLI sugere subir para `8.0.0-rc.13` a cada comando. Ignore — a
   versão é pinada de propósito (`CLAUDE.md`).
 - **`prisma migrate dev` é interativo** e recusa rodar sem TTY quando há aviso.

@@ -1,29 +1,29 @@
 import { db } from "@/lib/db";
+import { requireSession } from "@/lib/auth/session";
 import { confirmDocument } from "./actions";
 
 // Lista o que ainda não tem Delivery — precisa refletir uploads recentes.
 export const dynamic = "force-dynamic";
 
 export default async function RevisaoPage() {
-  const tenant = await db.tenant.findFirst({
+  const session = await requireSession();
+
+  const tenant = await db.tenant.findUniqueOrThrow({
+    where: { id: session.user.tenantId },
     include: { clients: { where: { active: true }, orderBy: { name: "asc" } } },
   });
 
-  const pending = tenant
-    ? await db.document.findMany({
-        where: { tenantId: tenant.id, deliveries: { none: {} } },
-        include: { client: true },
-        orderBy: { createdAt: "asc" },
-      })
-    : [];
+  const pending = await db.document.findMany({
+    where: { tenantId: tenant.id, deliveries: { none: {} } },
+    include: { client: true },
+    orderBy: { createdAt: "asc" },
+  });
 
   return (
     <main style={{ fontFamily: "sans-serif", maxWidth: 900, margin: "2rem auto" }}>
       <h1>Fila de revisão</h1>
 
-      {!tenant ? (
-        <p>Nenhum tenant cadastrado.</p>
-      ) : pending.length === 0 ? (
+      {pending.length === 0 ? (
         <p>Nada pendente — todo documento enviado já tem cliente e vencimento confirmados.</p>
       ) : (
         <table style={{ borderCollapse: "collapse", width: "100%" }}>

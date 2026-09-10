@@ -3,8 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
-
-const ACTOR_LABEL = "system:web"; // sem auth ainda
+import { requireSession } from "@/lib/auth/session";
 
 function parseIntField(value: FormDataEntryValue | null): number | null {
   if (typeof value !== "string" || value.trim() === "") return null;
@@ -13,7 +12,11 @@ function parseIntField(value: FormDataEntryValue | null): number | null {
 }
 
 export async function updateScheduleRule(formData: FormData) {
-  const tenant = await db.tenant.findFirstOrThrow();
+  const session = await requireSession();
+  // findFirstOrThrow() pegava QUALQUER tenant do banco, não o de quem
+  // estava mandando o form — o pior caso do "multi-tenant é segurança":
+  // um escritório mudava a regra de agendamento de outro.
+  const tenant = await db.tenant.findUniqueOrThrow({ where: { id: session.user.tenantId } });
   const ruleTypeRaw = formData.get("scheduleRuleType");
 
   if (ruleTypeRaw !== "FIXED_DAY" && ruleTypeRaw !== "BUSINESS_DAYS_BEFORE_DUE") {
@@ -55,7 +58,7 @@ export async function updateScheduleRule(formData: FormData) {
 
     await audit(
       tx,
-      { tenantId: tenant.id, actorLabel: ACTOR_LABEL },
+      { tenantId: tenant.id, actorId: session.user.id, actorLabel: session.user.email },
       {
         action: "tenant.schedule_rule_updated",
         entityType: "Tenant",
