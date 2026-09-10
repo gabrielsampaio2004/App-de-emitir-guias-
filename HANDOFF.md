@@ -3,12 +3,12 @@
 Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
-Estado: R2 verificado contra bucket real (10/09/2026). `npm run typecheck` passa limpo. `npm run dev` sobe. `npm run build`
-passa limpo (todas as rotas dinâmicas). Etapas 2 e 3 implementadas e
-verificadas localmente (Postgres/Redis reais neste ambiente, sem R2/Meta
-reais — ver seção 5).
+Estado: `npm run typecheck` e `npm run build` passam limpos (todas as rotas
+dinâmicas), `npm run dev` sobe. Etapas 1, 2 e 3 implementadas e verificadas
+contra Postgres, Redis e **R2 reais**. Falta só o lado da Meta para o aceite
+ponta a ponta — ver seção 5.
 
-Última atualização: 09/09/2026, etapa 3.
+Última atualização: 10/09/2026, R2 verificado.
 
 ---
 
