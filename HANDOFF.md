@@ -3,7 +3,7 @@
 Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
-Estado: `npm run typecheck` passa limpo. `npm run dev` sobe. `npm run build`
+Estado: R2 verificado contra bucket real (10/09/2026). `npm run typecheck` passa limpo. `npm run dev` sobe. `npm run build`
 passa limpo (todas as rotas dinâmicas). Etapas 2 e 3 implementadas e
 verificadas localmente (Postgres/Redis reais neste ambiente, sem R2/Meta
 reais — ver seção 5).
@@ -199,12 +199,23 @@ esperada sem credencial real — nenhuma linha órfã ficou no banco.
 "force-dynamic"` porque lê o banco a cada request e o Next ia
 pré-renderizá-la como estática no build, congelando os dados.
 
-**Falta para o aceite 100%:** credenciais reais da Meta (`WHATSAPP_WABA_ID`,
-`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN`, template aprovado
-`envio_guia_fiscal` categoria UTILITY) e do R2 (`R2_ACCOUNT_ID`,
-`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`), rodar o seed de novo
-com elas, subir `npm run dev` + `npm run worker`, e clicar "enviar agora" de
-verdade.
+**R2: verificado de verdade em 10/09/2026.** `src/lib/storage.ts` foi exercitado
+contra um bucket Cloudflare real (`guiazap-docs`, Public Access desabilitado),
+com `putObject` seguido de `getObject` e comparação do conteúdo — escrita e
+leitura completas. Até então esse código nunca tinha rodado contra R2 de
+verdade: todo teste da etapa 2 e da 3 morria em `R2_ACCOUNT_ID não definida`.
+
+**Falta para o aceite 100%:** só o lado da Meta — `WHATSAPP_WABA_ID`,
+`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_ACCESS_TOKEN` e o template aprovado
+`envio_guia_fiscal` (categoria UTILITY, header DOCUMENT). Depois: rodar o seed
+com essas variáveis, subir `npm run dev` + `npm run worker`, e clicar "enviar
+agora" de verdade.
+
+Limites do ambiente de teste da Meta, que valem enquanto não houver conta de
+produção: o token temporário da tela "API Setup" **expira em 24h** (para valer
+é preciso um token de System User), e o número de teste só entrega para
+destinatários previamente verificados no painel — por isso `SEED_CLIENT_PHONE`
+precisa ser um número dessa lista.
 
 ### Etapa 3 — o produto ✅ (até o limite de credenciais reais)
 
@@ -315,9 +326,10 @@ cliente do seed, outro com CPF de dígito verificador inválido que caiu como
 não-passou e caiu-no-mês-anterior), e a tela de log mostrando a trilha
 completa.
 
-**Falta para o aceite 100%:** as mesmas credenciais reais de R2/Meta da
-etapa 2 — o upload em lote para exatamente no `putObject` (`R2_ACCOUNT_ID
-não definida`), mesma fronteira, sem linha órfã no banco.
+**Falta para o aceite 100%:** só as credenciais da Meta (ver etapa 2 — o R2
+já foi verificado contra bucket real). O upload em lote parava exatamente no
+`putObject`; com o R2 configurado, essa fronteira saiu do caminho e o próximo
+limite passa a ser a chamada à Cloud API.
 
 ---
 
