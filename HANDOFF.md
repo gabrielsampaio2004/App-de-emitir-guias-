@@ -10,8 +10,9 @@ apagado.
 
 Estado: `npm run typecheck` e `npm run build` passam limpos (todas as rotas
 dinâmicas), `npm run dev` sobe. Etapas 1, 2 e 3 implementadas e verificadas
-contra Postgres, Redis e **R2 reais**. Falta só o lado da Meta para o aceite
-ponta a ponta — ver seção 5.
+contra Postgres, Redis e **R2 reais**. Para o aceite ponta a ponta falta só o
+lado da Meta (seção 5) — mas **há um bug aberto e sério** no caminho do envio,
+na seção 2.
 
 Última atualização: 10/09/2026, seção 4 resolvida.
 
@@ -100,16 +101,34 @@ problemas de forma errada.
 
 ## 2. Bugs abertos
 
-Nenhum no momento. Todos os bugs confirmados por execução foram corrigidos
-(dois na etapa 2, um na etapa 3, e os dois da seção 4). O que resta não é
-conserto, é construção: ver seções 3 e 5.
+**Um, e é sério: envio duplicado quando o processo morre no meio do envio.**
+O dispatcher pula `["SENT","DELIVERED","READ","CANCELLED"]`
+(`src/workers/dispatcher.ts:49`) — `SENDING` **não** está na lista. Se o
+processo cair depois de a Meta aceitar a mensagem e antes de gravar `SENT`, o
+BullMQ reexecuta o job travado, o dispatcher vê `SENDING` e envia de novo. E
+não há rede de proteção do outro lado: o `idempotencyKey` é declarado em
+`src/lib/whatsapp/provider.ts:22` prometendo evitar duplicidade, mas o
+`meta-cloud.ts` nunca o lê (confira com
+`grep -n idempotencyKey src/lib/whatsapp/*.ts`).
+
+⚠️ **Confirmado por leitura do código, ainda NÃO reproduzido.** Este documento
+já descreveu problema errado antes — reproduza antes de corrigir. O plano está
+na etapa A do `EXECUCAO.md`.
+
+Fora esse, todos os bugs confirmados por execução foram corrigidos (dois na
+etapa 2, um na etapa 3, e os dois da seção 4). O resto não é conserto, é
+construção: ver seções 3 e 5.
 
 ---
 
-## 3. Testes — decisão pendente
+## 3. Testes — decidido em 10/09/2026
 
-Não há test runner no `package.json`. Instalar um é decisão de arquitetura;
-**não instale nada sem perguntar antes.**
+Não há test runner no `package.json`. Instalar era decisão de arquitetura e
+estava condicionada a perguntar antes; **foi perguntado e autorizado pelo dono
+do projeto em 10/09/2026**, com a condição de usar o `node:test` nativo, que
+não adiciona dependência. Execução na etapa C do `EXECUCAO.md`.
+
+Qualquer outra dependência continua exigindo perguntar antes.
 
 Quando houver runner, estes cinco casos do `parseFilename` já passavam e não
 podem regredir:
