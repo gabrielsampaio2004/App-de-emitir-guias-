@@ -8,7 +8,7 @@ dinâmicas), `npm run dev` sobe. Etapas 1, 2 e 3 implementadas e verificadas
 contra Postgres, Redis e **R2 reais**. Falta só o lado da Meta para o aceite
 ponta a ponta — ver seção 5.
 
-Última atualização: 10/09/2026, R2 verificado.
+Última atualização: 10/09/2026, seção 4 resolvida.
 
 ---
 
@@ -96,8 +96,8 @@ problemas de forma errada.
 ## 2. Bugs abertos
 
 Nenhum no momento. Todos os bugs confirmados por execução foram corrigidos
-(dois na etapa 2, um na etapa 3 — ver seção 5). O que
-resta não é conserto, é construção: ver seções 3, 4 e 5.
+(dois na etapa 2, um na etapa 3, e os dois da seção 4). O que resta não é
+conserto, é construção: ver seções 3 e 5.
 
 ---
 
@@ -122,18 +122,47 @@ rejeitados.
 
 ---
 
-## 4. Problemas por inspeção — confirme antes de corrigir
+## 4. Problemas por inspeção — os dois confirmados e corrigidos ✅
 
-Não foram executados. Verifique cada um em vez de assumir.
+Estavam marcados como "não executados" desde o começo. Em 10/09/2026 os dois
+foram **reproduzidos de verdade** contra Postgres e Redis reais, e corrigidos.
 
-1. **Delivery órfã em `enqueueDue`** (`dispatcher.ts`): o código faz
-   `UPDATE ... status = 'QUEUED'` e depois `sendQueue.add()`. Se o `add` falhar
-   (Redis fora do ar), a linha fica `QUEUED` para sempre e nada a recupera —
-   `enqueueDue` só busca `SCHEDULED`. Resolva com um varredor de `QUEUED` parado
-   há mais de N minutos, ou invertendo a ordem. Decida e documente qual.
-2. **Consentimento inconsistente**: o schema permite `Consent` com
-   `status: GRANTED` e `revokedAt` preenchido ao mesmo tempo, e o dispatcher só
-   filtra por `status`. Escolha uma fonte de verdade única.
+1. **Delivery órfã em `enqueueDue`** — **confirmado.** Reprodução: com o Redis
+   derrubado, o `UPDATE` para `QUEUED` passa e o `sendQueue.add()` fica
+   pendurado (o BullMQ usa `maxRetriesPerRequest: null`, então o comando espera
+   reconexão em vez de falhar). Matando o processo aí, a linha fica `QUEUED`
+   com `attempts` em 0. Com o Redis de volta, `enqueueDue()` rodou e **não** a
+   recuperou — só procura `SCHEDULED` — e a fila ficou com zero jobs. Ou seja:
+   guia agendada que nunca sai, sem erro em lugar nenhum.
+
+   **Decisão (a seção pedia para decidir e documentar): varredor, não inverter
+   a ordem.** Inverter (enfileirar antes do UPDATE) trocaria "guia presa" por
+   "guia enviada duas vezes", já que o job poderia rodar com a linha ainda
+   `SCHEDULED` e o `enqueueDue` a pegaria de novo — e o `CLAUDE.md` é explícito
+   que envio duplicado é o pior desfecho.
+
+   `recoverOrphanedQueued()` em `src/lib/dispatch.ts` roda junto do
+   `enqueueDue`, a cada minuto. Em vez de um limite de tempo chutado, faz a
+   pergunta exata: *existe job para esta Delivery?* Se não existe, reenfileira
+   com o mesmo `idempotencyKey` como `jobId` — então a trava de idempotência
+   continua valendo. Verificado: resgatou a órfã, e a segunda passada resgatou
+   zero com a fila ainda em exatamente 1 job (não duplica). Job que esgotou as
+   retentativas fica na fila como `failed` com o id ocupado, e por isso não é
+   ressuscitado em silêncio — esse caso tem `lastError` e aparece na tela.
+
+2. **Consentimento inconsistente** — **confirmado.** O banco aceitava
+   `status: GRANTED` com `revokedAt` preenchido, e a query do dispatcher (que
+   filtra só por `status`) dava esse consentimento como válido: mandaria
+   mensagem para quem revogou.
+
+   **Fonte de verdade única: `status`.** `revokedAt` é só o carimbo de quando
+   a revogação aconteceu. A migration `20260910170000_consent_revoked_consistency`
+   adiciona um CHECK que proíbe a combinação incoerente no banco, não só na
+   aplicação. O dispatcher também passou a filtrar `revokedAt: null` — filtro
+   redundante de propósito: se a constraint cair um dia, o pior desfecho é não
+   enviar, nunca enviar para quem revogou. Verificado: a constraint rejeita
+   `GRANTED` + `revokedAt`, e uma revogação de verdade (`REVOKED` + carimbo)
+   continua permitida.
 
 ---
 

@@ -57,8 +57,12 @@ export const dispatcher = new Worker(
     }
 
     // Consentimento revogado depois do agendamento? Não envia.
+    // `status` é a fonte de verdade e a constraint do banco garante que
+    // GRANTED nunca tem revokedAt (migration 20260910170000). O filtro por
+    // revokedAt aqui é redundante de propósito: se um dia a constraint cair,
+    // o pior desfecho é não enviar, nunca enviar para quem revogou.
     const consent = await db.consent.findFirst({
-      where: { clientId: delivery.clientId, status: "GRANTED" },
+      where: { clientId: delivery.clientId, status: "GRANTED", revokedAt: null },
     });
     if (!consent) {
       await cancelDelivery(delivery.id, delivery.tenantId, "Sem consentimento ativo");
