@@ -14,12 +14,13 @@ implementadas e verificadas contra Postgres, Redis e **R2 reais**. Para o
 aceite ponta a ponta falta só o lado da Meta (seção 5). Sem bug sério aberto
 no caminho do envio — Etapas A, C e D do `EXECUCAO.md` fechadas em sessões
 anteriores: A (envio duplicado) na seção 4, C (testes automatizados) na
-seção 3, D (nome do template configurável) na seção 5 (Etapa 2). **Etapa B
-(autenticação) fechou nesta sessão** — login real, multi-tenant por sessão
-em vez de `findFirst()`, `AuditLog` com autor de verdade — ver seção 5
-(Etapa B).
+seção 3, D (nome do template configurável) na seção 5 (Etapa 2). Etapa B
+(autenticação) fechou numa sessão anterior — login real, multi-tenant por
+sessão em vez de `findFirst()`, `AuditLog` com autor de verdade — seção 5
+(Etapa B). **Etapa E (erros na tela) fechou nesta sessão** — ver seção 5
+(Etapa E).
 
-Última atualização: 10/09/2026 — Etapa B do `EXECUCAO.md` fechada.
+Última atualização: 11/09/2026 — Etapa E do `EXECUCAO.md` fechada.
 
 ---
 
@@ -683,6 +684,91 @@ Registrada também nas "Armadilhas deste repositório" do `EXECUCAO.md`.
 - Sem recuperação de senha, sem verificação de e-mail (não tem serviço de
   e-mail no projeto), sem rate limit de tentativa de login. Nenhum dos três
   estava no aceite da etapa; ficam como próximo passo se o dono quiser.
+
+### Etapa E do `EXECUCAO.md` — erros que não chegam na tela ✅
+
+Fechada em 11/09/2026. As Server Actions lançavam `Error` com mensagem boa,
+mas o Next mostrava tela de erro genérica em vez dela — corrigido com
+`useActionState` (React 19) nas duas actions que tinham os quatro casos
+pedidos: `sendNow` (`src/app/actions.ts`) e `confirmDocument`
+(`src/app/revisao/actions.ts`).
+
+**Mínimo possível no cliente**, como pedido: só o `<form>` virou Client
+Component em cada tela — `src/app/send-now-form.tsx` e
+`src/app/revisao/confirm-document-form.tsx` — enquanto `page.tsx` de `/` e
+`/revisao` continuam Server Component (buscam `tenant`/`deliveries`/
+`pending` no banco, só a submissão de cada form é client-side). A Server
+Action passou a receber `(prevState, formData)` e **devolver**
+`{ error: string } | {}` em vez de lançar, exatamente como o guia oficial
+(`node_modules/next/dist/docs/01-app/02-guides/forms.md`) documenta —
+li antes de escrever código, como o `CLAUDE.md` manda para qualquer coisa
+específica do Next.
+
+Os quatro casos pedidos, e onde cada um vive:
+- **Cliente desativado** — já existia como `throw` em `sendNow` e em
+  `confirmDocument`; virou `return { error: "..." }` nos dois.
+- **Documento já agendado** — já existia como `catch` de `P2002` que
+  lançava `Error` em `confirmDocument`; virou `return { error: "..." }`.
+- **PDF duplicado (`sha256` repetido)** — **não existia tratamento
+  nenhum** em `sendNow`: o `P2002` do `@@unique([tenantId, sha256])`
+  estourava sem `catch`, e o usuário via a tela de erro genérica do Next.
+  Adicionado `try/catch` ao redor do `$transaction`, igual ao que
+  `confirmDocument` já fazia.
+- **Arquivo que não é PDF** — já existia como `throw` em `sendNow`; virou
+  `return { error: "..." }`. (No upload em lote, `src/app/lote/actions.ts`,
+  este caso e o de duplicado já eram tratados sem lançar — contador por
+  arquivo, redirect com resumo na URL — por isso a etapa não mexeu lá.)
+
+Aproveitei para também converter as outras validações de `sendNow` e
+`confirmDocument` que ainda lançavam (`Documento inválido`, `Selecione um
+cliente`, `Vencimento inválido` etc.) para o mesmo padrão de estado — deixar
+metade das validações da mesma função com erro amigável e a outra metade
+crashando pra tela genérica seria inconsistente sem ganhar nada.
+
+**Verificado no navegador de verdade** (Chromium headless via Playwright,
+script scratch, apagado depois), os quatro casos, um por um:
+
+1. **Arquivo que não é PDF** — troquei o PDF por um `.txt` no input;
+   mensagem exibida: *"Só é aceito PDF."*, sem crash.
+2. **PDF duplicado** — enviei o mesmo PDF duas vezes com "enviar agora";
+   mensagem: *"Esta guia já foi enviada antes (mesmo arquivo) — duplicado,
+   ignorado."* Confirmado no banco: só um `Document` com aquele `sha256`.
+3. **Cliente desativado** — abri `/` com o cliente ainda ativo (opção real
+   no `<select>`, sem precisar injetar nada), desativei o cliente **por
+   fora** (direto no Postgres, simulando alguém desativando pelo
+   `/clientes` enquanto esta aba ficou aberta) e só então submeti o form
+   que a aba já tinha carregado; mensagem: *"Este cliente está desativado
+   — reative em /clientes antes de enviar."*
+4. **Documento já agendado** — upload em lote de um PDF sem cliente
+   reconhecido (foi pra fila de revisão), duas abas logadas confirmando o
+   mesmo documento quase ao mesmo tempo (mesmo teste da etapa 3, agora
+   passando pelo `useActionState`): a aba A confirmou normal, a aba B
+   recebeu *"Este documento já foi agendado — atualize a página."* em vez
+   de tela de erro. Confirmado no banco: só uma `Delivery` criada.
+
+**Armadilha encontrada no próprio teste, não no código:** o Next.js
+renderiza um `<div role="alert" id="__next-route-announcer__">` próprio
+(anúncio de rota para leitor de tela), que colide com `[role="alert"]` — o
+seletor do meu primeiro script de verificação pegava esse `div` vazio em
+vez do `<p role="alert">` do erro, e lia string vazia. Corrigido
+restringindo pra `p[role="alert"]`. Registrado aqui porque quem escrever
+outro teste de navegador neste projeto vai tropeçar na mesma coisa.
+
+**Bloqueio de ambiente, não do código:** sem credencial de R2 neste
+ambiente, `putObject()` lança antes de qualquer coisa (mesma fronteira já
+documentada nas etapas 2 e 3) — os casos 2 e 4 dependem de pelo menos um
+upload ter sucesso. Para não travar a verificação nisso, troquei
+temporariamente `src/lib/storage.ts` por uma versão que grava em
+`/tmp/fake-r2-storage` em vez do R2 (mesma assinatura de `putObject`/
+`getObject`, só a rede trocada — mesmo espírito do stub em `global.fetch`
+usado pra Meta na Etapa A), rodei os quatro casos, e **restaurei o arquivo
+original do backup antes de rodar `typecheck`/`test`/`build` finais e
+commitar** — `git diff src/lib/storage.ts` ficou vazio, confirmando que
+nada do stub sobrou no código.
+
+`npm run typecheck`, `npm test` (as 20 suítes, sem regressão) e
+`npm run build` (mesmas 11 rotas de antes) limpos, já com o `storage.ts`
+real de volta.
 
 ---
 

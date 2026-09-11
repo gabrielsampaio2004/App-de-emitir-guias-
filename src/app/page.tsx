@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { requireSession } from "@/lib/auth/session";
-import { sendNow } from "./actions";
+import { SendNowForm } from "./send-now-form";
 
 // Lê o banco a cada request (tenant, clientes, status dos envios). Sem isso
 // o Next prerenderizaria a página no build e ela ficaria congelada com os
@@ -35,29 +35,7 @@ export default async function HomePage() {
         <strong>{tenant.name}</strong>
       </p>
 
-      <form action={sendNow}>
-        <div>
-          <label htmlFor="clientId">Cliente</label>
-          <br />
-          <select id="clientId" name="clientId" required>
-            {tenant.clients.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.document})
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{ marginTop: "0.5rem" }}>
-          <label htmlFor="file">Guia (PDF)</label>
-          <br />
-          <input id="file" type="file" name="file" accept="application/pdf" required />
-        </div>
-
-        <button type="submit" style={{ marginTop: "1rem" }}>
-          Enviar agora
-        </button>
-      </form>
+      <SendNowForm clients={tenant.clients} />
 
       <h2 style={{ marginTop: "2rem" }}>Últimos envios</h2>
       {deliveries.length === 0 ? (

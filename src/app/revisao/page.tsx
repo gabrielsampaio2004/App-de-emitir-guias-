@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { requireSession } from "@/lib/auth/session";
-import { confirmDocument } from "./actions";
+import { ConfirmDocumentForm } from "./confirm-document-form";
 
 // Lista o que ainda não tem Delivery — precisa refletir uploads recentes.
 export const dynamic = "force-dynamic";
@@ -52,28 +52,11 @@ export default async function RevisaoPage() {
                       : `${doc.client.name} — desativado, escolha outro`}
                 </td>
                 <td>
-                  <form
-                    action={confirmDocument}
-                    style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
-                  >
-                    <input type="hidden" name="documentId" value={doc.id} />
-                    <select
-                      name="clientId"
-                      defaultValue={doc.client?.active ? doc.client.id : ""}
-                      required
-                    >
-                      <option value="" disabled>
-                        selecione
-                      </option>
-                      {tenant.clients.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} ({c.document})
-                        </option>
-                      ))}
-                    </select>
-                    <input type="date" name="dueDate" required />
-                    <button type="submit">Confirmar</button>
-                  </form>
+                  <ConfirmDocumentForm
+                    documentId={doc.id}
+                    clients={tenant.clients}
+                    defaultClientId={doc.client?.active ? doc.client.id : ""}
+                  />
                 </td>
               </tr>
             ))}

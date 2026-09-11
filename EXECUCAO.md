@@ -211,6 +211,12 @@ Documente a variável nova no `.env.example`.
 
 ## Etapa E — erros que não chegam na tela
 
+**✅ Fechada em 11/09/2026 — ver seção 5 (Etapa E) do `HANDOFF.md` para o
+que foi convertido, os quatro casos verificados no navegador e o stub
+temporário de storage usado (e removido) pra contornar a falta de
+credencial de R2 neste ambiente.** O resto desta seção fica como registro
+do raciocínio original; não reabra sem motivo.
+
 As Server Actions lançam `Error` com mensagem boa — "Este documento já foi
 agendado", "Este cliente está desativado" — mas o Next não propaga isso para o
 formulário: o usuário vê tela de erro genérica. Verificado na etapa 3.
@@ -298,6 +304,19 @@ Todas custaram tempo de verdade. Não redescubra.
   linha pode continuar visível na tela mesmo depois da ação ter funcionado.
   Isso é artefato de timing do teste. **Confirme no banco**, que é a fonte da
   verdade — já houve conclusão errada por causa disso.
+- **`[role="alert"]` não é só o seu.** O Next.js injeta um
+  `<div role="alert" id="__next-route-announcer__">` próprio (acessibilidade
+  de rota) em toda página. Um seletor de teste `[role="alert"]` genérico
+  casa com os dois — restrinja pela tag (`p[role="alert"]`, ou o que você
+  usar) senão o teste lê o `div` vazio do Next e "funciona" sem checar nada.
+- **Sem R2 real, todo fluxo que sobe arquivo trava em `putObject()`
+  antes de chegar em qualquer lógica de banco** (mesma fronteira das etapas
+  2/3). Pra testar o que vem depois do storage sem credencial real, o
+  padrão já usado neste projeto é trocar temporariamente `src/lib/storage.ts`
+  por uma versão que grava em disco local com a mesma assinatura, testar, e
+  **restaurar do backup antes de commitar** (`git diff src/lib/storage.ts`
+  tem que voltar vazio) — mesmo espírito do stub em `global.fetch` da
+  Etapa A pra Meta.
 - **Não apague linha do `AuditLog`**, nem em limpeza de teste. É append-only e
   o `CLAUDE.md` proíbe.
 
