@@ -3,62 +3,153 @@
 Contexto do produto, stack e regras invioláveis estão no `CLAUDE.md`. **Leia-o
 primeiro.** Este documento é só a ordem de trabalho.
 
-Estado: `npm run typecheck` passa limpo. `npm run dev` **ainda falha** — não
-existe `src/app/`.
+Estado: `npm run typecheck` passa limpo, `npm run dev` sobe e responde em
+localhost:3000, e a migration inicial existe e aplica. **A Etapa 1 está
+fechada.** O que falta é provar o envio de ponta a ponta — Etapa 2.
 
-Última atualização: 02/09/2026, após o commit `6a3238e`.
+Última atualização: 11/09/2026.
 
 ---
 
 ## 1. Feito (não refazer)
 
-Registrado porque a versão anterior deste documento descrevia alguns destes
+Registrado porque versões anteriores deste documento descreveram alguns destes
 problemas de forma errada.
 
-- **`filename.ts` TS2532** — corrigido com `w[i] ?? 0`. ⚠️ Os cinco casos da
-  tabela na seção 3 **ainda não viraram teste automatizado** (não há test runner).
-- **`split(" ")[0]` no `dispatcher.ts`** — era o item "não verificado" da lista
-  antiga. Confirmou-se; corrigido com fallback para o nome completo.
-- **`new Blob([file])` com `Buffer`** — também era "não verificado". Confirmou-se
-  (`Buffer<ArrayBufferLike>` não é `BlobPart`); corrigido com `new Uint8Array(file)`.
-- **Prisma 7** — a versão anterior dizia que o problema era o gerador antigo
-  `prisma-client-js`. **Estava errado.** A causa real era outra e maior: o
-  Prisma 7 proíbe `url` no `schema.prisma` (erro P1012) e exige driver adapter
-  no construtor do `PrismaClient`. Resolvido criando `prisma.config.ts`,
-  removendo a `url` do schema e passando `PrismaPg` ao cliente. O gerador
-  `prisma-client-js` continua funcionando normalmente.
-- **`tsconfig.json`: `baseUrl`** — não estava na lista. O TypeScript 7 removeu a
-  opção (erro TS5102) e o typecheck nem começava. Removida; `paths` funciona
-  sozinho, resolvendo relativo ao `tsconfig.json`.
-- **`tsconfig.json`: `types`** — não estava na lista. O TS 7 não inclui mais os
-  tipos do Node automaticamente; `Buffer`, `process` e `NodeJS` davam TS2591
-  mesmo com `@types/node` instalado. Resolvido com `"types": ["node"]`.
-- **`tx` implicitamente `any`** — apareceu e sumiu sozinho. Era consequência do
-  `PrismaClient` não resolver; com o client gerado, a inferência funciona.
-- **`scrub` no `audit/index.ts`** — os três defeitos foram corrigidos. Agora é
-  recursiva (segredo aninhado em qualquer profundidade vira `[redacted]`),
-  preserva arrays, converte `Date` para ISO e `bigint` para string, com limite
-  de 20 níveis contra estruturas circulares. Verificada com 14 casos. ⚠️ Os
-  testes rodaram fora do projeto e **não estão versionados** — ver seção 3.
-- **`src/lib/crypto.ts` e `src/lib/storage.ts`** — criados. O `crypto.ts` foi
-  testado funcionalmente: cifra, decifra e rejeita dado adulterado.
+- **`filename.ts` TS2532** — corrigido com `w[i] ?? 0`. Os cinco casos da tabela
+  da seção 3 foram reexecutados em 11/09 e **os cinco passam**. ⚠️ Continuam sem
+  virar teste automatizado (não há test runner — ver seção 3).
+- **`split(" ")[0]` no `dispatcher.ts`** — confirmado e corrigido com fallback
+  para o nome completo.
+- **`new Blob([file])` com `Buffer`** — confirmado (`Buffer<ArrayBufferLike>` não
+  é `BlobPart`); corrigido com `new Uint8Array(file)`.
+- **Prisma 7** — a causa real era o Prisma 7 proibir `url` no `schema.prisma`
+  (P1012) e exigir driver adapter no construtor. Resolvido com `prisma.config.ts`,
+  `url` fora do schema e `PrismaPg` no cliente. O gerador `prisma-client-js`
+  nunca foi o problema.
+- **`tsconfig.json`: `baseUrl`** — o TypeScript 7 removeu a opção (TS5102).
+  Removida; `paths` resolve relativo ao `tsconfig.json`.
+- **`tsconfig.json`: `types`** — o TS 7 não inclui mais os tipos do Node
+  automaticamente. Resolvido com `"types": ["node"]`.
+- **`scrub` no `audit/index.ts`** — recursiva, preserva arrays, converte `Date` e
+  `bigint`, limite de 20 níveis.
+- **`src/lib/crypto.ts` e `src/lib/storage.ts`** — criados e funcionais.
+- **Etapa 1** — `src/app/layout.tsx` e `src/app/page.tsx` criados; o `dev` sobe.
+- **Migration inicial** (11/09) — `prisma/migrations/20260911032831_init`. Além do
+  schema, carrega as travas descritas na seção 2.
+- **Rodada de correções de 11/09** — detalhada na seção 2.
 
 ---
 
-## 2. Bugs abertos
+## 2. Correções de 11/09 e as decisões que elas travaram
 
-Nenhum no momento. Todos os bugs confirmados por execução foram corrigidos.
-O que resta não é conserto, é construção: ver seções 3, 4 e 5.
+Tudo aqui foi verificado com Postgres e Redis reais (23 asserções, todas
+passando). Os scripts de verificação **não foram versionados**, pela mesma razão
+da seção 3.
+
+### `AuditLog` append-only de verdade
+
+O `REVOKE UPDATE, DELETE ... FROM PUBLIC` que o `CLAUDE.md` exige está na
+migration, mas **sozinho ele não funcionava**: o dono da tabela ignora
+GRANT/REVOKE no Postgres, e a aplicação conecta com o usuário que criou o schema.
+Medido: com só o `REVOKE`, `UPDATE "AuditLog" SET action='adulterado'` retorna
+`UPDATE 1`. A migration agora também instala os gatilhos `auditlog_no_update`,
+`auditlog_no_delete` e `auditlog_no_truncate`. Efeito colateral aceito: fixture
+de teste não consegue dar `TRUNCATE` — use banco novo a cada rodada.
+
+### Envio duplo: a trava mudou de lugar
+
+O guarda de reentrada do worker era uma lista de status já resolvidos
+(`SENT`, `DELIVERED`, `READ`, `CANCELLED`) que **não incluía `SENDING`**. Se o
+processo morresse entre marcar `SENDING` e marcar `SENT`, a retentativa do BullMQ
+passava direto e reenviava — contra a regra inviolável.
+
+Agora o worker só trabalha se conseguir mover `QUEUED -> SENDING` num `UPDATE`
+condicional. Quem não conseguir, sai sem tocar na Meta. É estritamente mais forte
+que a lista anterior e cobre o caso do crash.
+
+### Varredor de deliveries travadas — decisão da antiga seção 4, item 1
+
+**Decisão: a ordem `UPDATE -> QUEUED` antes do `sendQueue.add` fica como está.**
+Inverter faria o job existir antes de a linha estar travada, abrindo janela para
+dois workers pegarem a mesma delivery. Trocar risco de linha parada por risco de
+envio duplo é troca ruim aqui.
+
+O buraco foi coberto por dois lados:
+
+1. Se o `add` falhar, o `enqueueDue` devolve a linha para `SCHEDULED` na hora.
+2. `sweepStalled()` roda a cada minuto junto com o `enqueueDue` e cuida do resto.
+
+O varredor **nunca reenvia por conta própria**. Ele só devolve para `SCHEDULED` o
+que comprovadamente não chegou à fila (sem job com aquele `jobId`, e sem
+`waMessageId`). Todo caso em que o envio possa ter acontecido — parado em
+`SENDING`, ou com `waMessageId` já preenchido — vira `FAILED` com o motivo no
+`lastError`, para um humano conferir no painel da Meta antes de decidir. Isso
+troca entrega automática por não cobrar duas vezes, que é o lado certo da regra.
+
+`Delivery` ganhou `updatedAt` (`@updatedAt`) e o índice `[status, updatedAt]`;
+é por ele que o varredor mede há quanto tempo a linha não anda. A janela é
+`STALLED_AFTER_MS`, hoje 10 minutos.
+
+### Consentimento — decisão da antiga seção 4, item 2
+
+**Decisão: `status` é a fonte de verdade única. `revokedAt` é só a data.** O
+banco passa a impedir o par contraditório, via CHECK na migration inicial:
+`("status" = 'REVOKED') = ("revokedAt" IS NOT NULL)`. O dispatcher também filtra
+por `revokedAt: null`, ordena por `grantedAt desc` e passou a filtrar por
+`channel` (antes pegava um consentimento qualquer, de qualquer canal).
+
+### Auditoria nos caminhos que não tinham
+
+Havia **uma única** chamada de `audit()` no projeto inteiro, no caminho de
+sucesso. Cancelamento por falta de consentimento e falha de envio mudavam o
+status da `Delivery` sem log — e, no caso da falha, com dois writes fora de
+transação. Agora cancelamento, falha retentável, falha definitiva e as duas
+saídas do varredor gravam `Delivery` + `DeliveryEvent` + `AuditLog` na mesma
+transação. Ações novas: `delivery.cancelled`, `delivery.send_failed`,
+`delivery.failed`, `delivery.requeued`.
+
+### Outros
+
+- **`waAccount!`** — tenant sem conta conectada virava `TypeError`, que não é
+  `WhatsAppError` e portanto contava como retentável: cinco tentativas inúteis e
+  a linha parada. Agora é `WhatsAppError(..., retryable: false)` e falha na
+  primeira.
+- **Segredo em mensagem de erro** — o texto do erro agora vai para o `AuditLog`,
+  que é append-only: o que entrar ali não sai. `redactSecrets()` corta
+  `Bearer ...` e `access_token=...` antes de persistir, e a exceção relançada
+  para o BullMQ também vai redigida.
+- **Formato da competência** — o `parseFilename` grava `"2026-08"` e o contrato
+  do provider documenta `"08/2026"`. O dispatcher mandava o formato cru para o
+  WhatsApp. Agora converte na fronteira.
+- **Vencimento** — `toLocaleDateString` sem fuso fazia um vencimento gravado à
+  meia-noite UTC aparecer como o dia anterior em UTC-3. Fixado em UTC.
+- **`idempotencyKey`** — o `MetaCloudProvider` **recebia e ignorava**. A Cloud API
+  não tem cabeçalho de idempotência; não há o que fazer com ela ali. O contrato
+  em `provider.ts` foi corrigido para dizer isso, em vez de prometer uma garantia
+  que não existe. A proteção real é o `jobId` do BullMQ mais a trava de status.
+- **`prisma generate`** — num clone limpo o `typecheck` não compilava, porque o
+  `prisma.config.ts` usava `env("DATABASE_URL")`, que aborta o carregamento do
+  config e derrubava até o `generate`. Agora lê `process.env` direto, e há um
+  `postinstall`.
+- **`next.config.mjs`** — criado só para `agentRules: false`. O `next dev` do
+  Next 16 reescrevia o `CLAUDE.md` a cada execução, acrescentando um bloco vindo
+  do `node_modules`.
 
 ---
 
-## 3. Testes — decisão pendente
+## 3. Testes — decisão ainda pendente
 
-Não há test runner no `package.json`. Instalar um é decisão de arquitetura;
-**não instale nada sem perguntar antes.**
+Continua não havendo test runner no `package.json`, e **nada foi instalado**.
+A decisão segue sua: o Node 22 traz `node:test` embutido, o que permitiria um
+`npm test` sem dependência nova — mas ainda é decisão de arquitetura, então não
+tomei. **Pergunte antes de instalar qualquer coisa.**
 
-Quando houver runner, estes cinco casos do `parseFilename` já passavam e não
-podem regredir:
+As verificações de 11/09 rodaram em scripts descartáveis, fora do versionamento.
+Enquanto não houver runner, nada disso protege contra regressão.
+
+Quando houver, comece por estes cinco casos do `parseFilename` — reexecutados em
+11/09, os cinco passando:
 
 | entrada | `document` | `kind` | `competencia` |
 |---|---|---|---|
@@ -71,35 +162,36 @@ podem regredir:
 A última linha é a que importa: 14 dígitos que **não** são CNPJ válido devem ser
 rejeitados.
 
+E depois estes, que hoje só existem como script descartável: a trava
+`QUEUED -> SENDING` sob concorrência, as quatro saídas do `sweepStalled`, o CHECK
+do `Consent` e os gatilhos do `AuditLog`. Todos precisam de Postgres real.
+
 ---
 
-## 4. Problemas por inspeção — confirme antes de corrigir
+## 4. Em aberto — confirme antes de assumir
 
-Não foram executados. Verifique cada um em vez de assumir.
+Os dois itens que ocupavam esta seção foram confirmados e resolvidos (seção 2).
+O que resta aqui **não foi executado**:
 
-1. **Delivery órfã em `enqueueDue`** (`dispatcher.ts`): o código faz
-   `UPDATE ... status = 'QUEUED'` e depois `sendQueue.add()`. Se o `add` falhar
-   (Redis fora do ar), a linha fica `QUEUED` para sempre e nada a recupera —
-   `enqueueDue` só busca `SCHEDULED`. Resolva com um varredor de `QUEUED` parado
-   há mais de N minutos, ou invertendo a ordem. Decida e documente qual.
-2. **Consentimento inconsistente**: o schema permite `Consent` com
-   `status: GRANTED` e `revokedAt` preenchido ao mesmo tempo, e o dispatcher só
-   filtra por `status`. Escolha uma fonte de verdade única.
+1. **`connection: { url: REDIS_URL }` do BullMQ** — funciona nos testes contra
+   Redis local sem senha e sem TLS. Não foi exercitado contra Redis gerenciado
+   (`rediss://`, senha, TLS). Confirme antes de subir para produção.
+2. **`STALLED_AFTER_MS` = 10 minutos** — chutado para ser maior que o envio mais
+   lento plausível (upload do PDF para a Meta + POST do template). Nunca foi
+   medido contra a Meta de verdade. Meça na Etapa 2 e ajuste.
+3. **Retentabilidade dos códigos da Meta** — `meta-cloud.ts` trata como
+   retentável só 5xx, `4` e `80007`. A lista veio de documentação, não de
+   observação. Confira contra o que aparecer de verdade.
 
 ---
 
 ## 5. O que construir, em ordem
 
-### Etapa 1 — fazer rodar  ← ATUAL
+### Etapa 1 — fazer rodar ✅ concluída
 
-Falta só o app Next. Crie `src/app/layout.tsx` e `src/app/page.tsx` mínimos.
-O Next 16 sobe sem `next.config.mjs`; só crie um se precisar de configuração.
-Lembre que `package.json` tem `"type": "module"`.
+`npm run dev` sobe e responde em localhost:3000; `npm run typecheck` limpo.
 
-Aceite: `npm run dev` sobe e responde em localhost:3000. (`npm run typecheck`
-limpo já está feito.)
-
-### Etapa 2 — provar o envio de ponta a ponta
+### Etapa 2 — provar o envio de ponta a ponta  ← ATUAL
 
 Um tenant fixo em seed, um cliente cadastrado na mão, upload de um PDF, botão
 "enviar agora". **Sem agendamento ainda.** O objetivo é ver a guia chegar no
@@ -112,10 +204,10 @@ WhatsApp e o webhook voltar `delivered`.
 - Grave `DeliveryEvent` para cada status e atualize `sentAt`/`deliveredAt`/`readAt`.
 - Webhooks da Meta **chegam fora de ordem e repetidos**. Nunca regrida o status
   (`READ` não volta para `DELIVERED`) e trate reentrega do mesmo evento.
+- O webhook é também o lugar de gravar auditoria dos status que chegam — siga o
+  padrão da seção 2: estado e log na mesma transação.
 
-Antes disso vai ser preciso rodar a primeira migration (`npm run db:migrate`),
-que exige um Postgres de verdade — hoje o `.env` aponta para um localhost que
-pode não existir.
+A migration inicial já existe; basta um Postgres de verdade e `npm run db:migrate`.
 
 Aceite: uma guia real chega num WhatsApp real e o banco registra
 `sent` → `delivered`.
@@ -127,7 +219,9 @@ Aceite: uma guia real chega num WhatsApp real e o banco registra
   revisão manual.
 - Agendamento por regra ("dia 20", "3 dias úteis antes do vencimento"), com
   calendário de feriados.
-- Tela de log lendo `AuditLog` e `DeliveryEvent`.
+- Tela de log lendo `AuditLog` e `DeliveryEvent`. Inclua as deliveries que o
+  `sweepStalled` marcou como `FAILED`: são exatamente as que precisam de decisão
+  humana, e hoje não há tela que as mostre.
 
 ---
 
@@ -140,6 +234,8 @@ Ao terminar cada etapa, diga:
 2. Quais itens da seção 4 se confirmaram e quais não.
 3. O que ficou faltando.
 
-Vale notar: dos problemas listados como "não verificados" na versão anterior
-deste documento, dois se confirmaram, um estava descrito com a causa errada, e
-três problemas reais não estavam listados. Verificar de fato importa.
+Vale notar: na revisão de 11/09, o próprio cabeçalho deste documento estava
+errado (dizia que o `dev` não subia, quando subia desde dois commits antes), o
+`README.md` listava como inexistentes três arquivos que existiam, e a regra do
+`AuditLog` no `CLAUDE.md` estava implementável ao pé da letra e ainda assim não
+funcionaria. Verificar de fato importa.

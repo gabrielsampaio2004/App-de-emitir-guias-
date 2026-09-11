@@ -18,7 +18,17 @@ export interface SendDocumentParams {
     competencia: string; // "08/2026"
     vencimento: string;  // "20/09/2026"
   };
-  /** Evita duplicidade se a chamada for repetida */
+  /**
+   * Identifica este envio de ponta a ponta.
+   *
+   * Atenção ao que isto NÃO é: a Cloud API da Meta não tem cabeçalho de
+   * idempotência, então o `MetaCloudProvider` não consegue usar esta chave
+   * para deduplicar — ele a recebe e não tem o que fazer com ela. A garantia
+   * de "nunca enviar duas vezes" mora em dois lugares, ambos nossos: o
+   * `jobId` do BullMQ (que é esta chave) e a trava de status do dispatcher,
+   * onde só quem move QUEUED -> SENDING envia. Um provedor que ofereça
+   * idempotência de verdade deve usar este campo.
+   */
   idempotencyKey: string;
 }
 

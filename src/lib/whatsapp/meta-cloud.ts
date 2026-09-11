@@ -72,7 +72,10 @@ export class MetaCloudProvider implements WhatsAppProvider {
       throw new WhatsAppError(
         err.message ?? "Falha no envio",
         String(err.code ?? res.status),
-        // 131049 = limite de marketing por usuário; 4/80007 = rate limit; 5xx = instabilidade
+        // Retentável: 5xx (instabilidade da Meta) e os dois códigos de rate
+        // limit. Erro de negócio — template reprovado, número inválido,
+        // 131049 (limite por usuário) — não melhora tentando de novo e vai
+        // direto para FAILED.
         res.status >= 500 || err.code === 4 || err.code === 80007,
       );
     }

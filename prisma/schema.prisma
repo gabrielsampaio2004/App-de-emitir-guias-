@@ -92,11 +92,14 @@ model Consent {
   status     ConsentStatus
   evidence   Json?         // origem, IP, texto aceito, ou id da msg de opt-in
   grantedAt  DateTime      @default(now())
+  // `status` é a fonte de verdade; `revokedAt` é só a data da revogação.
+  // A migration inicial impõe um CHECK: revokedAt preenchido se e somente se
+  // status = REVOKED. Sem isso o par podia se contradizer silenciosamente.
   revokedAt  DateTime?
 
   client Client @relation(fields: [clientId], references: [id])
 
-  @@index([clientId, status])
+  @@index([clientId, status, revokedAt])
 }
 
 enum ConsentStatus {
@@ -150,6 +153,9 @@ model Delivery {
   deliveredAt    DateTime?
   readAt         DateTime?
   createdAt      DateTime       @default(now())
+  // Toda transição de status toca este campo. É por ele que o varredor de
+  // deliveries paradas (sweepStalled) mede há quanto tempo a linha não anda.
+  updatedAt      DateTime       @updatedAt
 
   tenant   Tenant          @relation(fields: [tenantId], references: [id])
   document Document        @relation(fields: [documentId], references: [id])
@@ -157,6 +163,7 @@ model Delivery {
   events   DeliveryEvent[]
 
   @@index([status, scheduledAt])
+  @@index([status, updatedAt])
   @@index([tenantId, createdAt])
 }
 
@@ -175,7 +182,7 @@ enum DeliveryStatus {
 model DeliveryEvent {
   id         String   @id @default(cuid())
   deliveryId String
-  type       String   // queued, sent, delivered, read, failed
+  type       String   // queued, sent, delivered, read, failed, cancelled, requeued
   payload    Json?
   occurredAt DateTime @default(now())
 

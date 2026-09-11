@@ -1,4 +1,4 @@
-import { enqueueDue, dispatcher, sendQueue } from "./dispatcher";
+import { enqueueDue, sweepStalled, dispatcher, sendQueue } from "./dispatcher";
 
 const TICK_MS = 60_000;
 
@@ -12,6 +12,13 @@ async function tick() {
     await enqueueDue();
   } catch (err) {
     console.error("[dispatcher] falha ao enfileirar:", err);
+  }
+  try {
+    // Separado do enqueueDue de propósito: se o enfileiramento falhar, a
+    // varredura das linhas travadas é justamente o que não pode deixar de rodar.
+    await sweepStalled();
+  } catch (err) {
+    console.error("[dispatcher] falha ao varrer deliveries travadas:", err);
   } finally {
     running = false;
   }
